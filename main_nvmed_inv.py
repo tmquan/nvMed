@@ -153,15 +153,17 @@ def make_cameras_dea(
     dist: torch.Tensor, 
     elev: torch.Tensor, 
     azim: torch.Tensor, 
-    fov: int = 30, 
+    fov: int = 40, 
     znear: int = 4.0, 
-    zfar: int = 8.0,
-) -> FoVPerspectiveCameras:
+    zfar: int = 8.0, 
+    is_orthogonal: bool = False
+):
     assert dist.device == elev.device == azim.device
     _device = dist.device
     R, T = look_at_view_transform(dist=dist.float(), elev=elev.float() * 90, azim=azim.float() * 180)
+    if is_orthogonal:
+        return FoVOrthographicCameras(R=R, T=T, znear=znear, zfar=zfar).to(_device)
     return FoVPerspectiveCameras(R=R, T=T, fov=fov, znear=znear, zfar=zfar).to(_device)
-
 
 class NVMLightningModule(LightningModule):
     def __init__(self, hparams, **kwargs) -> None:
@@ -257,12 +259,12 @@ class NVMLightningModule(LightningModule):
         dist_random = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_random = torch.rand_like(dist_random) - 0.5
         azim_random = torch.rand_like(dist_random) * 2 - 1  # [0 1) to [-1 1)
-        view_random = make_cameras_dea(dist_random, elev_random, azim_random, fov=30, znear=4, zfar=8)
+        view_random = make_cameras_dea(dist_random, elev_random, azim_random, fov=40, znear=4, zfar=8)
 
         dist_hidden = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_hidden = torch.zeros(self.batch_size, device=_device)
         azim_hidden = torch.zeros(self.batch_size, device=_device)
-        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=30, znear=4, zfar=8)
+        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=40, znear=4, zfar=8)
 
         # Construct the samples in 2D
         figure_xr_hidden = image2d
@@ -313,7 +315,7 @@ class NVMLightningModule(LightningModule):
             ], dim=-2)
             tensorboard = self.logger.experiment
             grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0)
-            tensorboard.add_image(f"validation_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
+            tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
 
         if self.phase == "direct":
             im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d)
