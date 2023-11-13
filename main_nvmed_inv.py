@@ -94,8 +94,8 @@ class InverseXrayVolumeRenderer(nn.Module):
             attention_levels=[False, False, False, True, True],
             norm_num_groups=8,
             num_res_blocks=2,
-            with_conditioning=True,
-            cross_attention_dim=12,  # flatR | flatT
+            with_conditioning=False,
+            # cross_attention_dim=12,  # flatR | flatT
         )
         
         self.net3d3d = nn.Sequential(
@@ -114,7 +114,7 @@ class InverseXrayVolumeRenderer(nn.Module):
             ),
         )
         
-    def forward(self, image2d, cameras, timesteps=None, resample=True, is_training=False):
+    def forward(self, image2d, cameras, timesteps=None, is_training=False):
         _device = image2d.device
         batch = image2d.shape[0]
         dtype = image2d.dtype
@@ -124,15 +124,14 @@ class InverseXrayVolumeRenderer(nn.Module):
         R = cameras.R
         T = torch.zeros_like(cameras.T.unsqueeze_(-1))
         
-        mat = torch.cat([R, T], dim=-1)
-        # rot = R
+        # mat = torch.cat([R, T], dim=-1)
+        inv = torch.cat([torch.inverse(R), -T], dim=-1)
         mid = self.net2d3d(
             x=image2d,
-            context=mat.reshape(batch, 1, -1),
+            # context=inv.reshape(batch, 1, -1),
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
 
-        inv = torch.cat([torch.inverse(R), -T], dim=-1)
         grd = F.affine_grid(inv, mid.size()).type(dtype)
         
         mid_resample = F.grid_sample(mid, grd)
@@ -142,12 +141,12 @@ class InverseXrayVolumeRenderer(nn.Module):
             rng = torch.rand(1).item()
             if rng > 0.5:
                 out = self.net3d3d(mid)
-                out = F.grid_sample(out, grd)
+                out_resample = F.grid_sample(out, grd)
             else:
-                out = self.net3d3d(mid_resample)
+                out_resample = self.net3d3d(mid_resample)
         else:
-            out = self.net3d3d(mid_resample)
-        return out, mid_resample
+            out_resample = self.net3d3d(mid_resample)
+        return out_resample, mid_resample
 
 def make_cameras_dea(
     dist: torch.Tensor, 
@@ -241,11 +240,11 @@ class NVMLightningModule(LightningModule):
     def forward_screen(self, image3d, cameras):
         return self.fwd_renderer(image3d, cameras)
 
-    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=True, timesteps=None, has_middle=False):
+    def forward_volume(self, image2d, cameras, n_views=[2, 1], has_middle=False, timesteps=None, is_training=False):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
-        results, middles = self.inv_renderer(image2d, cameras, timesteps, resample)
+        results, middles = self.inv_renderer(image2d, cameras, timesteps, is_training)
         if has_middle:
             return results, middles
         return results
@@ -277,8 +276,9 @@ class NVMLightningModule(LightningModule):
             image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
             cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
             n_views=[1, 1, 1]*batchsz,
-            has_middle=True
-            )
+            has_middle=True, 
+            is_training=(stage=="train"),
+        )
         volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
         middle_xr_hidden_inverse, middle_ct_random_inverse, middle_ct_hidden_inverse = torch.split(middle_dx_concat, batchsz)
 
