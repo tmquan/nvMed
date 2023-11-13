@@ -58,7 +58,8 @@ backbones = {
     "efficientnet-b6": (32, 40, 72, 200, 576),
     "efficientnet-b7": (32, 48, 80, 224, 640),
     "efficientnet-b8": (32, 56, 88, 248, 704),
-    "efficientnet-b9": (32, 64, 96, 256, 800),
+    # "efficientnet-b9": (32, 64, 96, 256, 800),
+    "efficientnet-b9": (64, 128, 256, 512, 1024),
     "efficientnet-l2": (72, 104, 176, 480, 1376),
 }
 
@@ -86,16 +87,32 @@ class InverseXrayVolumeRenderer(nn.Module):
         self.fwd_renderer = fwd_renderer
         assert backbone in backbones.keys()
 
-        self.net2d3d = DiffusionModelUNet(
-            spatial_dims=2,
-            in_channels=1,  # Condition with straight/hidden view
-            out_channels=self.fov_depth,
-            num_channels=backbones[backbone],
-            attention_levels=[False, False, False, True, True],
-            norm_num_groups=8,
-            num_res_blocks=2,
-            with_conditioning=False,
-            # cross_attention_dim=12,  # flatR | flatT
+        # self.net2d3d = DiffusionModelUNet(
+        #     spatial_dims=2,
+        #     in_channels=1,  # Condition with straight/hidden view
+        #     out_channels=self.fov_depth,
+        #     num_channels=backbones[backbone],
+        #     attention_levels=[False, False, False, True, True],
+        #     norm_num_groups=8,
+        #     num_res_blocks=2,
+        #     with_conditioning=False,
+        #     # cross_attention_dim=12,  # flatR | flatT
+        # )
+        
+        self.net2d3d = nn.Sequential(
+            Unet(
+                spatial_dims=2,
+                in_channels=1,  # Condition with straight/hidden view
+                out_channels=self.fov_depth,
+                channels=backbones[backbone],
+                strides=(2, 2, 2, 2, 2), 
+                num_res_units=2, 
+                kernel_size=3, 
+                up_kernel_size=3, 
+                act=("LeakyReLU", {"inplace": True}), 
+                norm=Norm.BATCH,
+                dropout=0.5
+            ),
         )
         
         self.net3d3d = nn.Sequential(
@@ -126,11 +143,14 @@ class InverseXrayVolumeRenderer(nn.Module):
         
         # mat = torch.cat([R, T], dim=-1)
         inv = torch.cat([torch.inverse(R), -T], dim=-1)
-        mid = self.net2d3d(
-            x=image2d,
-            # context=inv.reshape(batch, 1, -1),
-            timesteps=timesteps,
-        ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
+        
+        # mid = self.net2d3d(
+        #     x=image2d,
+        #     # context=inv.reshape(batch, 1, -1),
+        #     timesteps=timesteps,
+        # ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
+        
+        mid = self.net2d3d(image2d).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
 
         grd = F.affine_grid(inv, mid.size()).type(dtype)
         
