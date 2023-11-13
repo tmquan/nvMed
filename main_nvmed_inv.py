@@ -221,6 +221,7 @@ class NVMLightningModule(LightningModule):
         )
 
         if self.ckpt:
+            print("Loading.. ", self.ckpt)
             checkpoint = torch.load(self.ckpt, map_location=torch.device("cpu"))["state_dict"]
             state_dict = {k: v for k, v in checkpoint.items() if k in self.state_dict()}
             self.load_state_dict(state_dict, strict=self.strict)
@@ -272,11 +273,14 @@ class NVMLightningModule(LightningModule):
         figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
         
         # Reconstruct the Encoder-Decoder
-        volume_dx_concat = self.forward_volume(
+        volume_dx_concat, middle_dx_concat = self.forward_volume(
             image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
             cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-            n_views=[1, 1, 1]*batchsz)
+            n_views=[1, 1, 1]*batchsz,
+            has_middle=True
+            )
         volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
+        middle_xr_hidden_inverse, middle_ct_random_inverse, middle_ct_hidden_inverse = torch.split(middle_dx_concat, batchsz)
 
         figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
         figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden)
@@ -317,11 +321,25 @@ class NVMLightningModule(LightningModule):
             grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0)
             tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
 
-        if self.phase == "direct":
-            im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d)
+        # if self.phase == "direct":
+        #     im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d)
+        #     im3d_loss = im3d_loss_inv
+        #     self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+        #     loss = self.alpha * im3d_loss
+        if self.phase == "ctonly":
+            im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
+                          + self.maeloss(middle_ct_hidden_inverse, image3d) \
+                          + self.maeloss(volume_ct_random_inverse, image3d) \
+                          + self.maeloss(middle_ct_random_inverse, image3d) 
             im3d_loss = im3d_loss_inv
             self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            loss = self.alpha * im3d_loss
+            im2d_loss_inv = self.maeloss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) \
+                          + self.maeloss(figure_ct_hidden_inverse_random, figure_ct_random) \
+                          + self.maeloss(figure_ct_random_inverse_hidden, figure_ct_hidden) \
+                          + self.maeloss(figure_ct_random_inverse_random, figure_ct_random) 
+            im2d_loss = im2d_loss_inv
+            self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            loss = self.alpha * im3d_loss + self.gamma * im2d_loss
         return loss
 
     def training_step(self, batch, batch_idx):
