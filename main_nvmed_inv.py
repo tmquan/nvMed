@@ -58,8 +58,8 @@ backbones = {
     "efficientnet-b6": (32, 40, 72, 200, 576),
     "efficientnet-b7": (32, 48, 80, 224, 640),
     "efficientnet-b8": (32, 56, 88, 248, 704),
-    # "efficientnet-b9": (32, 64, 96, 256, 800),
-    "efficientnet-b9": (64, 128, 256, 512, 1024),
+    "efficientnet-b9": (32, 64, 96, 256, 800),
+    # "efficientnet-b9": (64, 128, 256, 512, 1024),
     "efficientnet-l2": (72, 104, 176, 480, 1376),
 }
 
@@ -87,32 +87,16 @@ class InverseXrayVolumeRenderer(nn.Module):
         self.fwd_renderer = fwd_renderer
         assert backbone in backbones.keys()
 
-        # self.net2d3d = DiffusionModelUNet(
-        #     spatial_dims=2,
-        #     in_channels=1,  # Condition with straight/hidden view
-        #     out_channels=self.fov_depth,
-        #     num_channels=backbones[backbone],
-        #     attention_levels=[False, False, False, True, True],
-        #     norm_num_groups=8,
-        #     num_res_blocks=2,
-        #     with_conditioning=False,
-        #     # cross_attention_dim=12,  # flatR | flatT
-        # )
-        
-        self.net2d3d = nn.Sequential(
-            Unet(
-                spatial_dims=2,
-                in_channels=1,  # Condition with straight/hidden view
-                out_channels=self.fov_depth,
-                channels=backbones[backbone],
-                strides=(2, 2, 2, 2, 2), 
-                num_res_units=2, 
-                kernel_size=3, 
-                up_kernel_size=3, 
-                act=("LeakyReLU", {"inplace": True}), 
-                norm=Norm.BATCH,
-                dropout=0.5
-            ),
+        self.net2d3d = DiffusionModelUNet(
+            spatial_dims=2,
+            in_channels=1,  # Condition with straight/hidden view
+            out_channels=self.fov_depth,
+            num_channels=backbones[backbone],
+            attention_levels=[False, False, False, True, True],
+            norm_num_groups=8,
+            num_res_blocks=2,
+            with_conditioning=True,
+            cross_attention_dim=12,  # flatR | flatT
         )
         
         self.net3d3d = nn.Sequential(
@@ -141,16 +125,15 @@ class InverseXrayVolumeRenderer(nn.Module):
         R = cameras.R
         T = torch.zeros_like(cameras.T.unsqueeze_(-1))
         
-        # mat = torch.cat([R, T], dim=-1)
+        mat = torch.cat([R, T], dim=-1)
         inv = torch.cat([torch.inverse(R), -T], dim=-1)
         
-        # mid = self.net2d3d(
-        #     x=image2d,
-        #     # context=inv.reshape(batch, 1, -1),
-        #     timesteps=timesteps,
-        # ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
-        
-        mid = self.net2d3d(image2d).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
+        mid = self.net2d3d(
+            x=image2d,
+            context=mat.reshape(batch, 1, -1),
+            timesteps=timesteps,
+        ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
+        # mid = self.net2d3d(image2d).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
 
         grd = F.affine_grid(inv, mid.size()).type(dtype)
         
@@ -223,8 +206,8 @@ class NVMLightningModule(LightningModule):
             image_width=self.img_shape, 
             image_height=self.img_shape, 
             n_pts_per_ray=self.n_pts_per_ray, 
-            min_depth=4.0, 
-            max_depth=8.0, 
+            min_depth=3.0, 
+            max_depth=9.0, 
             ndc_extent=4.0,
         )
 
@@ -279,12 +262,12 @@ class NVMLightningModule(LightningModule):
         dist_random = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_random = torch.rand_like(dist_random) - 0.5
         azim_random = torch.rand_like(dist_random) * 2 - 1  # [0 1) to [-1 1)
-        view_random = make_cameras_dea(dist_random, elev_random, azim_random, fov=40, znear=4, zfar=8)
+        view_random = make_cameras_dea(dist_random, elev_random, azim_random, fov=40, znear=3, zfar=9)
 
         dist_hidden = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_hidden = torch.zeros(self.batch_size, device=_device)
         azim_hidden = torch.zeros(self.batch_size, device=_device)
-        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=40, znear=4, zfar=8)
+        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=40, znear=3, zfar=9)
 
         # Construct the samples in 2D
         figure_xr_hidden = image2d
