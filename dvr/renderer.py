@@ -27,9 +27,9 @@ class ForwardXRayVolumeRenderer(nn.Module):
         image_width: int = 256, 
         image_height: int = 256, 
         n_pts_per_ray: int = 320, 
-        min_depth: float = 2.0, 
-        max_depth: float = 6.0, 
-        ndc_extent: float = 3.0, 
+        min_depth: float = 3.0, 
+        max_depth: float = 9.0, 
+        ndc_extent: float = 1.0, 
         stratified_sampling: bool = False,
     ):
         super().__init__()
@@ -62,7 +62,7 @@ class ForwardXRayVolumeRenderer(nn.Module):
         self.volumes = Volumes(
             features=features,
             densities=densities,
-            voxel_size=self.ndc_extent / shape,
+            voxel_size=2.0*float(self.ndc_extent)/shape,
             # volume_translation = [-0.5, -0.5, -0.5],
         )
         
