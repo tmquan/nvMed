@@ -211,7 +211,8 @@ class NVMLightningModule(LightningModule):
             max_depth=9.0, 
             ndc_extent=1.0,
             tffunction=True,
-            data_range=16000,
+            data_dim=16000,
+            feat_dim=1,
         )
 
         self.inv_renderer = InverseXrayVolumeRenderer(
