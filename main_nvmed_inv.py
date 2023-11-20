@@ -21,7 +21,7 @@ from typing import Optional, NamedTuple
 from lightning_fabric.utilities.seed import seed_everything
 from lightning import Trainer, LightningModule
 from lightning.pytorch.callbacks import ModelCheckpoint
-from lightning.pytorch.callbacks import LearningRateMonitor
+from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
 from lightning.pytorch.callbacks import StochasticWeightAveraging
 from lightning.pytorch.loggers import TensorBoardLogger
 
@@ -211,7 +211,7 @@ class NVMLightningModule(LightningModule):
             max_depth=9.0, 
             ndc_extent=1.0,
             tffunction=True,
-            data_dim=16000,
+            data_dim=4000,
             feat_dim=1,
         )
 
@@ -328,7 +328,7 @@ class NVMLightningModule(LightningModule):
             tensorboard = self.logger.experiment
             grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0)
             tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
-
+            tensorboard.add_histogram(f"{stage}_embeddings", self.fwd_renderer.embeddings.weight, self.current_epoch * self.batch_size + batch_idx)
         # if self.phase == "direct":
         #     im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d)
         #     im3d_loss = im3d_loss_inv
@@ -466,9 +466,17 @@ if __name__ == "__main__":
     # Logger
     tensorboard_logger = TensorBoardLogger(save_dir=f"{hparams.logsdir}", log_graph=True)
     swa_callback = StochasticWeightAveraging(swa_lrs=1e-2)
+    early_stop_callback = EarlyStopping(
+        monitor="validation_loss_epoch",  # The quantity to be monitored
+        min_delta=0.00,  # Minimum change in the monitored quantity to qualify as an improvement
+        patience=10,  # Number of epochs with no improvement after which training will be stopped
+        verbose=True,  # Whether to print logs in stdout
+        mode="min",  # In 'min' mode, training will stop when the quantity monitored has stopped decreasing
+    )
     callbacks = [
         lr_callback,
         checkpoint_callback,
+        early_stop_callback,
     ]
     if hparams.strategy != "fsdp":
         callbacks.append(swa_callback)
