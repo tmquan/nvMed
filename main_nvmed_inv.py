@@ -185,18 +185,18 @@ class InverseXrayVolumeRenderer(nn.Module):
         grd = F.affine_grid(inv, mid.size()).type(dtype)
         
         mid_resample = F.grid_sample(mid, grd)
-        # if is_training:
-        #     # Randomly return out_resample or out_explicit
-        #     rng = torch.rand(1).item()
-        #     if rng > 0.5:
-        #         out = self.net3d3d(mid)
-        #         out_resample = F.grid_sample(out, grd)
-        #     else:
-        #         out_resample = self.net3d3d(mid_resample)
-        # else:
-        #     out_resample = self.net3d3d(mid_resample)
+        # out_resample = self.net3d3d(mid_resample)
         
-        out_resample = self.net3d3d(mid_resample)
+        if is_training:
+            # Randomly return out_resample or out_explicit
+            rng = torch.rand(1).item()
+            if rng > 0.5:
+                out = self.net3d3d(mid)
+                out_resample = F.grid_sample(out, grd)
+            else:
+                out_resample = self.net3d3d(mid_resample)
+        else:
+            out_resample = self.net3d3d(mid_resample)
         return out_resample, mid_resample
 
 class NVMLightningModule(LightningModule):
@@ -256,7 +256,7 @@ class NVMLightningModule(LightningModule):
             backbone=self.backbone,
             fwd_renderer=self.fwd_renderer,
         )
-        init_weights(self.inv_renderer, init_type="normal")
+        # init_weights(self.inv_renderer, init_type="normal")
         
         if self.ckpt:
             print("Loading.. ", self.ckpt)
