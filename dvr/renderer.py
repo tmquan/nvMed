@@ -30,7 +30,7 @@ class ForwardXRayVolumeRenderer(nn.Module):
         min_depth: float = 3.0, 
         max_depth: float = 9.0, 
         ndc_extent: float = 1.0, 
-        tffunction: bool = False,
+        tfunc: bool = False,
         data_dim: int = 1024,
         feat_dim: int = 3,
         stratified_sampling: bool = False,
@@ -46,8 +46,8 @@ class ForwardXRayVolumeRenderer(nn.Module):
                                                    stratified_sampling=stratified_sampling,)
         self.renderer = VolumeRenderer(raysampler=self.raysampler, raymarcher=self.raymarcher,)
         self.ndc_extent = ndc_extent
-        self.tffunction = tffunction
-        if self.tffunction:
+        self.tfunc = tfunc
+        if self.tfunc:
             # Define the embedding layer
             self.data_dim = data_dim
             self.feat_dim = feat_dim
@@ -67,7 +67,7 @@ class ForwardXRayVolumeRenderer(nn.Module):
         return_bundle=False
     ) -> torch.Tensor:
         
-        if self.tffunction:
+        if self.tfunc:
             # Ensure the range
             image3d = image3d.clamp(0, 1)
             B, C, D, H, W = image3d.shape
@@ -127,7 +127,7 @@ class ReverseXRayVolumeRenderer(ForwardXRayVolumeRenderer):
         min_depth: float = 3.0, 
         max_depth: float = 9.0, 
         ndc_extent: float = 1.0, 
-        tffunction: bool = False,
+        tfunc: bool = False,
         data_dim: int = 1024,
         feat_dim: int = 3,
         stratified_sampling: bool = False,
@@ -143,8 +143,8 @@ class ReverseXRayVolumeRenderer(ForwardXRayVolumeRenderer):
                                                    stratified_sampling=stratified_sampling,)
         self.renderer = VolumeRenderer(raysampler=self.raysampler, raymarcher=self.raymarcher,)
         self.ndc_extent = ndc_extent
-        self.tffunction = tffunction
-        if self.tffunction:
+        self.tfunc = tfunc
+        if self.tfunc:
             # Define the embedding layer
             self.data_dim = data_dim
             self.feat_dim = feat_dim

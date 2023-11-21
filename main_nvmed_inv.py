@@ -231,6 +231,7 @@ class NVMLightningModule(LightningModule):
         self.batch_size = hparams.batch_size
         self.devices = hparams.devices
         self.backbone = hparams.backbone
+        self.tfunc = hparams.tfunc
 
         self.save_hyperparameters()
 
@@ -241,7 +242,7 @@ class NVMLightningModule(LightningModule):
             min_depth=2.0, 
             max_depth=10.0, 
             ndc_extent=1.0,
-            tffunction=True,
+            tfunc=self.tfunc,
             data_dim=4096,
             feat_dim=1,
         )
@@ -476,6 +477,7 @@ if __name__ == "__main__":
     parser.add_argument("--test", action="store_true", help="test")
     parser.add_argument("--lpips", action="store_true", help="train with lpips xray ct random")
     parser.add_argument("--strict", action="store_true", help="checkpoint loading")
+    parser.add_argument("--tfunc", action="store_true", help="learnable mapping")
     parser.add_argument("--phase", type=str, default="direct", help="direct|cyclic|paired")
 
     parser.add_argument("--alpha", type=float, default=1.0, help="vol loss")
