@@ -177,7 +177,7 @@ class UnpairedDataModule(LightningDataModule):
                         ScaleIntensityRangeDict(
                             keys=["image3d"],
                             clip=True,
-                            a_min=-500,
+                            a_min=-1024,
                             a_max=3071,
                             b_min=0.0,
                             b_max=1.0,
@@ -336,7 +336,7 @@ class UnpairedDataModule(LightningDataModule):
                         ScaleIntensityRangeDict(
                             keys=["image3d"],
                             clip=True,
-                            a_min=-500,
+                            a_min=-1024,
                             a_max=3071,
                             b_min=0.0,
                             b_max=1.0,
@@ -456,7 +456,7 @@ class UnpairedDataModule(LightningDataModule):
                         ScaleIntensityRangeDict(
                             keys=["image3d"],
                             clip=True,
-                            a_min=-500,
+                            a_min=-1024,
                             a_max=3071,
                             b_min=0.0,
                             b_max=1.0,
