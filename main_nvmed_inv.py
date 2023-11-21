@@ -97,7 +97,7 @@ def init_weights(net, init_type = 'normal', gain = 0.02):
                 raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
             if hasattr(m, 'bias') and m.bias is not None:
                 nn.init.constant_(m.bias.data, 0.0)
-        elif classname.find('BatchNorm2d') != -1:
+        elif classname.find('BatchNorm') != -1:
             nn.init.normal_(m.weight.data, 1.0, gain)
             nn.init.constant_(m.bias.data, 0.0)
 
@@ -170,8 +170,13 @@ class InverseXrayVolumeRenderer(nn.Module):
         mat = torch.cat([R, T], dim=-1)
         inv = torch.cat([torch.inverse(R), -T], dim=-1)
         
+        # Transpose on the fly to make it homogeneous
+        image2d = torch.flip(image2d, [2, 3])
+        image2d = image2d.transpose(2, 3)
+        
+        # Run forward pass
         mid = self.net2d3d(
-            x=image2d,
+            x=image2d, 
             context=mat.reshape(batch, 1, -1),
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
@@ -251,7 +256,7 @@ class NVMLightningModule(LightningModule):
             backbone=self.backbone,
             fwd_renderer=self.fwd_renderer,
         )
-        init_weights(self.inv_renderer)
+        init_weights(self.inv_renderer, init_type="normal")
         
         if self.ckpt:
             print("Loading.. ", self.ckpt)
@@ -356,6 +361,15 @@ class NVMLightningModule(LightningModule):
             grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0)
             tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
             tensorboard.add_histogram(f"{stage}_embeddings", self.fwd_renderer.embeddings.weight, self.current_epoch * self.batch_size + batch_idx)
+        if self.phase == "direct":
+            im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
+                          + self.maeloss(middle_ct_hidden_inverse, image3d) \
+                          + self.maeloss(volume_ct_random_inverse, image3d) \
+                          + self.maeloss(middle_ct_random_inverse, image3d) 
+            im3d_loss = im3d_loss_inv
+            self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            loss = self.alpha * im3d_loss
+            
         if self.phase == "ctonly":
             im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
                           + self.maeloss(middle_ct_hidden_inverse, image3d) \
@@ -370,6 +384,7 @@ class NVMLightningModule(LightningModule):
             im2d_loss = im2d_loss_inv
             self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss = self.alpha * im3d_loss + self.gamma * im2d_loss
+            
         if self.phase == "cycle":
             im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
                           + self.maeloss(middle_ct_hidden_inverse, image3d) \
@@ -381,6 +396,7 @@ class NVMLightningModule(LightningModule):
             im2d_loss = im2d_loss_inv
             self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss = self.alpha * im3d_loss + self.gamma * im2d_loss
+            
         if self.phase == "ctxray":
             im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
                           + self.maeloss(middle_ct_hidden_inverse, image3d) \
@@ -397,6 +413,7 @@ class NVMLightningModule(LightningModule):
             im2d_loss = im2d_loss_inv
             self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss = self.alpha * im3d_loss + self.gamma * im2d_loss
+            
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -487,7 +504,7 @@ if __name__ == "__main__":
 
     # Callback
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"{hparams.logsdir}",
+        dirpath=f"{hparams.logsdir}_{hparams.phase}",
         monitor="validation_loss_epoch",
         auto_insert_metric_name=True,
         save_top_k=-1,
@@ -497,7 +514,7 @@ if __name__ == "__main__":
     lr_callback = LearningRateMonitor(logging_interval="step")
 
     # Logger
-    tensorboard_logger = TensorBoardLogger(save_dir=f"{hparams.logsdir}", log_graph=True)
+    tensorboard_logger = TensorBoardLogger(save_dir=f"{hparams.logsdir}_{hparams.phase}", log_graph=True)
     swa_callback = StochasticWeightAveraging(swa_lrs=1e-2)
     early_stop_callback = EarlyStopping(
         monitor="validation_loss_epoch",  # The quantity to be monitored
