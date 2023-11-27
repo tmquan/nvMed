@@ -222,7 +222,6 @@ class NVMLightningModule(LightningModule):
         self.batch_size = hparams.batch_size
         self.devices = hparams.devices
         self.backbone = hparams.backbone
-        self.tfunc = hparams.tfunc
 
         self.save_hyperparameters()
 
@@ -358,9 +357,7 @@ class NVMLightningModule(LightningModule):
             tensorboard = self.logger.experiment
             grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0)
             tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
-            if self.tfunc:
-                tensorboard.add_histogram(f"{stage}_embeddings", self.fwd_renderer.embeddings.weight, self.current_epoch * self.batch_size + batch_idx)
-                
+            
         if self.phase == "direct":
             im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
                           + self.maeloss(volume_ct_random_inverse, image3d) 
@@ -427,20 +424,15 @@ class NVMLightningModule(LightningModule):
         self.validation_step_outputs.clear()  # free memory
 
     def configure_optimizers(self):
-        if self.tfunc:
-        #     optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, betas=(0.9, 0.999))
-        # else:
-            optimizer = torch.optim.AdamW(
-                [
-                    {"params": self.fwd_renderer.parameters()},
-                    {"params": self.inv_renderer.parameters()},
-                ],
-                lr=self.lr,
-                betas=(0.9, 0.999)
-                # 
-            )
-        else:
-            optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, betas=(0.9, 0.999))
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": self.fwd_renderer.parameters()},
+                {"params": self.inv_renderer.parameters()},
+            ],
+            lr=self.lr,
+            betas=(0.9, 0.999)
+            # 
+        )
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100, 200], gamma=0.1)
         return [optimizer], [scheduler]
 
