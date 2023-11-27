@@ -273,18 +273,18 @@ class NVMLightningModule(LightningModule):
         #         is_fake_3d=True, fake_3d_ratio=0.001,
         #         pretrained=True,
         #     )
-    def correct_window(self, Told, vminold=-1024, vmaxold=3071, vminnew=-512, vmaxnew=3072):
+    def correct_window(self, T_old, a_min=-1024, a_max=3071, b_min=-512, b_max=3072):
         # Calculate the range for the old and new scales
-        rangeold = vmaxold - vminold
-        rangenew = vmaxnew - vminnew
+        range_old = a_max - a_min
+        range_new = b_max - b_min
         # Reverse the incorrect scaling
-        Traw = (Told * rangeold) + vminold
+        T_raw = (T_old * range_old) + a_min
         # Apply the correct scaling
-        Tnew = (Traw - vminnew) / rangenew
-        return Tnew
+        T_new = (T_raw - b_min) / range_new
+        return T_new.clamp_(0, 1)
        
     def forward_screen(self, image3d, cameras):
-        windowed = self.correct_window(image3d, vminold=-1024, vmaxold=3071, vminnew=-512, vmaxnew=3072)
+        windowed = self.correct_window(image3d, a_min=-1024, a_max=3071, b_min=-500, b_max=3072)
         return self.fwd_renderer(windowed, cameras)
 
     def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None, is_training=False):
