@@ -30,7 +30,6 @@ class ForwardXRayVolumeRenderer(nn.Module):
         min_depth: float = 3.0, 
         max_depth: float = 9.0, 
         ndc_extent: float = 1.0, 
-        tfunc: bool = False,
         data_dim: int = 1024,
         feat_dim: int = 3,
         stratified_sampling: bool = False,
@@ -46,41 +45,18 @@ class ForwardXRayVolumeRenderer(nn.Module):
                                                    stratified_sampling=stratified_sampling,)
         self.renderer = VolumeRenderer(raysampler=self.raysampler, raymarcher=self.raymarcher,)
         self.ndc_extent = ndc_extent
-        self.tfunc = tfunc
-        if self.tfunc:
-            # Define the embedding layer
-            self.data_dim = data_dim
-            self.feat_dim = feat_dim
-            self.embeddings = nn.Embedding(data_dim, feat_dim)
-            # Initialize the embedding weights linearly
-            linear_weight = torch.linspace(0, self.data_dim, self.data_dim).unsqueeze(1) / self.data_dim
-            self.embeddings.weight = nn.Parameter(linear_weight.repeat(1, self.feat_dim))
             
 
     def forward(self, 
         image3d, 
         cameras, 
         opacity=None, 
-        norm_type="standardized", 
+        norm_type="minimized", 
         scaling_factor=0.1, 
         is_grayscale=True, 
         return_bundle=False
     ) -> torch.Tensor:
         
-        if self.tfunc:
-            # Ensure the range
-            image3d = image3d.clamp(0, 1)
-            B, C, D, H, W = image3d.shape
-            # Bin the data
-            binning = image3d * (self.data_dim - 1)
-            binning = binning.long().clamp(0, self.data_dim - 1)
-            # Apply the embedding
-            flatten = self.embeddings(binning.flatten()) 
-            # Reshape to the original tensor shape
-            image3d = flatten.reshape((B, -1, D, H, W))
-            # Ensuring the output is in the range (0, 1)
-            image3d = torch.clamp(image3d, 0, 1)
-            
         features = image3d.repeat(1, 3, 1, 1, 1) if image3d.shape[1] == 1 else image3d
         if opacity is None:
             densities = torch.ones_like(image3d[:, [0]]) * scaling_factor
@@ -127,7 +103,6 @@ class ReverseXRayVolumeRenderer(ForwardXRayVolumeRenderer):
         min_depth: float = 3.0, 
         max_depth: float = 9.0, 
         ndc_extent: float = 1.0, 
-        tfunc: bool = False,
         data_dim: int = 1024,
         feat_dim: int = 3,
         stratified_sampling: bool = False,
@@ -143,13 +118,3 @@ class ReverseXRayVolumeRenderer(ForwardXRayVolumeRenderer):
                                                    stratified_sampling=stratified_sampling,)
         self.renderer = VolumeRenderer(raysampler=self.raysampler, raymarcher=self.raymarcher,)
         self.ndc_extent = ndc_extent
-        self.tfunc = tfunc
-        if self.tfunc:
-            # Define the embedding layer
-            self.data_dim = data_dim
-            self.feat_dim = feat_dim
-            self.embeddings = nn.Embedding(data_dim, feat_dim)
-            # Initialize the embedding weights linearly
-            linear_weight = torch.linspace(0, self.data_dim, self.data_dim).unsqueeze(1) / self.data_dim
-            self.embeddings.weight = nn.Parameter(linear_weight.repeat(1, self.feat_dim))
-            

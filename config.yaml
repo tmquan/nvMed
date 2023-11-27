@@ -1,0 +1,102 @@
+log_vars:
+- loss_rgb_psnr_fg
+- loss_rgb_psnr
+- loss_rgb_mse
+- loss_rgb_huber
+- loss_depth_abs
+- loss_depth_abs_fg
+- loss_mask_neg_iou
+- loss_mask_bce
+- loss_mask_beta_prior
+- loss_eikonal
+- loss_density_tv
+- loss_depth_neg_penalty
+- loss_autodecoder_norm
+- loss_prev_stage_rgb_mse
+- loss_prev_stage_rgb_psnr_fg
+- loss_prev_stage_rgb_psnr
+- loss_prev_stage_mask_bce
+- objective
+- epoch
+- sec/it
+mask_images: true
+mask_depths: true
+render_image_width: 256
+render_image_height: 256
+mask_threshold: 0.5
+output_rasterized_mc: false
+bg_color:
+- 0.0
+- 0.0
+- 0.0
+num_passes: 1
+chunk_size_grid: 4096
+render_features_dimensions: 3
+tqdm_trigger_threshold: 16
+n_train_target_views: 1
+sampling_mode_training: mask_sample
+sampling_mode_evaluation: full_grid
+global_encoder_class_type: null
+raysampler_class_type: AdaptiveRaySampler
+renderer_class_type: SinglePassEmissionAbsorptionRenderer
+image_feature_extractor_class_type: ResNetFeatureExtractor
+view_pooler_enabled: false
+implicit_function_class_type: NeuralRadianceFieldImplicitFunction
+view_metrics_class_type: ViewMetrics
+regularization_metrics_class_type: RegularizationMetrics
+loss_weights:
+  loss_rgb_mse: 1.0
+  loss_rgb_huber: 0.0
+  loss_mask_bce: 0.0
+raysampler_AdaptiveRaySampler_args:
+  scene_extent: 1.0
+  n_pts_per_ray_training: 256
+  n_pts_per_ray_evaluation: 256
+renderer_SinglePassEmissionAbsorptionRenderer_args:
+  raymarcher_class_type: EmissionAbsorptionRaymarcher
+  n_pts_per_ray_fine_training: 64
+  n_pts_per_ray_fine_evaluation: 64
+  stratified_sampling_coarse_training: true
+  stratified_sampling_coarse_evaluation: false
+  append_coarse_samples_to_fine: true
+  density_noise_std_train: 0.0
+  return_weights: false
+  blurpool_weights: false
+  sample_pdf_eps: 1.0e-05
+  raymarcher_EmissionAbsorptionRaymarcher_args:
+    surface_thickness: 1
+    bg_color:
+    - 0.0
+    replicate_last_interval: false
+    background_opacity: 10000000000.0
+    density_relu: true
+    blend_output: false
+image_feature_extractor_ResNetFeatureExtractor_args:
+  add_images: true
+  add_masks: true
+  first_max_pool: false
+  image_rescale: 0.32
+  l2_norm: true
+  name: resnet101
+  normalize_image: true
+  pretrained: true
+  stages:
+  - 1
+  - 2
+  - 3
+  - 4
+  proj_dim: 16
+implicit_function_NeuralRadianceFieldImplicitFunction_args:
+  n_harmonic_functions_xyz: 10
+  n_harmonic_functions_dir: 4
+  n_hidden_neurons_dir: 128
+  input_xyz: true
+  xyz_ray_dir_in_camera_coords: false
+  use_integrated_positional_encoding: false
+  transformer_dim_down_factor: 1.0
+  n_hidden_neurons_xyz: 256
+  n_layers_xyz: 8
+  append_xyz:
+  - 5
+view_metrics_ViewMetrics_args: {}
+regularization_metrics_RegularizationMetrics_args: {}

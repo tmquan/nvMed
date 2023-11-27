@@ -62,9 +62,13 @@ class UnpairedDataset(CacheDataset, Randomizable):
             if self.is_training:
                 rand_idx = self.R.randint(0, len(dataset))
                 data[key] = dataset[rand_idx]
+                data[f"{key}_idx"] = rand_idx
             else:
                 data[key] = dataset[index]
-
+                data[f"{key}_idx"] = index
+            # Add the filename to the data dictionary
+            data[f"{key}_pth"] = data[key]  # Assuming "image3d" contains the filename
+            
         if self.transform is not None:
             data = apply_transform(self.transform, data)
 
@@ -177,7 +181,7 @@ class UnpairedDataModule(LightningDataModule):
                         ScaleIntensityRangeDict(
                             keys=["image3d"],
                             clip=True,
-                            a_min=-512,
+                            a_min=-1024,
                             a_max=3071,
                             b_min=0.0,
                             b_max=1.0,
@@ -336,7 +340,7 @@ class UnpairedDataModule(LightningDataModule):
                         ScaleIntensityRangeDict(
                             keys=["image3d"],
                             clip=True,
-                            a_min=-512,
+                            a_min=-1024,
                             a_max=3071,
                             b_min=0.0,
                             b_max=1.0,
@@ -456,7 +460,7 @@ class UnpairedDataModule(LightningDataModule):
                         ScaleIntensityRangeDict(
                             keys=["image3d"],
                             clip=True,
-                            a_min=-512,
+                            a_min=-1024,
                             a_max=3071,
                             b_min=0.0,
                             b_max=1.0,

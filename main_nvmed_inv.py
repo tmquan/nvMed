@@ -113,7 +113,6 @@ class InverseXrayVolumeRenderer(nn.Module):
         img_shape=256,
         vol_shape=256,
         fov_depth=256,
-        fwd_renderer=None,
         sh=0,
         pe=0,
         backbone="efficientnet-b9",
@@ -126,7 +125,6 @@ class InverseXrayVolumeRenderer(nn.Module):
         self.fov_depth = fov_depth
         self.pe = pe
         self.sh = sh
-        self.fwd_renderer = fwd_renderer
         assert backbone in backbones.keys()
 
         self.net2d3d = DiffusionModelUNet(
@@ -153,7 +151,7 @@ class InverseXrayVolumeRenderer(nn.Module):
                 up_kernel_size=3, 
                 act=("LeakyReLU", {"inplace": True}), 
                 norm=Norm.BATCH,
-                # dropout=0.5
+                dropout=0.5
             ),
         )
         
@@ -221,7 +219,9 @@ class NVMLightningModule(LightningModule):
         self.lamda = hparams.lamda
     
         self.timesteps = hparams.timesteps
-
+        self.perceptual2d = hparams.perceptual2d
+        self.perceptual3d = hparams.perceptual3d
+        
         self.logsdir = hparams.logsdir
         self.sh = hparams.sh
         self.pe = hparams.pe
@@ -255,9 +255,8 @@ class NVMLightningModule(LightningModule):
             sh=self.sh, 
             pe=self.pe, 
             backbone=self.backbone,
-            fwd_renderer=self.fwd_renderer,
         )
-        # init_weights(self.inv_renderer, init_type="normal")
+        init_weights(self.inv_renderer, init_type="xavier")
         
         if self.ckpt:
             print("Loading.. ", self.ckpt)
@@ -269,17 +268,26 @@ class NVMLightningModule(LightningModule):
         self.validation_step_outputs = []
         self.maeloss = nn.L1Loss(reduction="mean")
         
-        # self.pctloss = PerceptualLoss(
-        #     spatial_dims=2, 
-        #     network_type="radimagenet_resnet50", 
-        #     # network_type="resnet50", 
-        #     # network_type="medicalnet_resnet50_23datasets", 
-        #     is_fake_3d=False, 
-        #     pretrained=True,
-        # )
-
-    def forward_screen(self, image3d, cameras):
-        return self.fwd_renderer(image3d, cameras)
+        if self.perceptual2d:
+            self.pctloss = PerceptualLoss(
+                spatial_dims=2, 
+                network_type="radimagenet_resnet50", 
+                # network_type="resnet50", 
+                # network_type="medicalnet_resnet50_23datasets", 
+                is_fake_3d=False, 
+                pretrained=True,
+            )
+        if self.perceptual3d:
+            self.pctloss = PerceptualLoss(
+                spatial_dims=2, 
+                network_type="radimagenet_resnet50", 
+                # network_type="resnet50", 
+                # network_type="medicalnet_resnet50_23datasets", 
+                is_fake_3d=True, fake_3d_ratio=0.001,
+                pretrained=True,
+            )
+    def forward_screen(self, image3d, cameras, with_tfunc=False):
+        return self.fwd_renderer(image3d, cameras, with_tfunc=with_tfunc)
 
     def forward_volume(self, image2d, cameras, n_views=[2, 1], has_middle=False, timesteps=None, is_training=False):
         _device = image2d.device
@@ -308,9 +316,10 @@ class NVMLightningModule(LightningModule):
         view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=20, znear=2, zfar=10)
 
         # Construct the samples in 2D
+        # with torch.no_grad():
         figure_xr_hidden = image2d
-        figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
-        figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
+        figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random, with_tfunc=False)
+        figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden, with_tfunc=False)
         
         # Reconstruct the Encoder-Decoder
         volume_dx_concat, middle_dx_concat = self.forward_volume(
@@ -323,12 +332,13 @@ class NVMLightningModule(LightningModule):
         volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
         middle_xr_hidden_inverse, middle_ct_random_inverse, middle_ct_hidden_inverse = torch.split(middle_dx_concat, batchsz)
 
-        figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
-        figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden)
-        figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random)
-        figure_ct_random_inverse_hidden = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_hidden)
-        figure_ct_hidden_inverse_random = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_random)
-        figure_ct_hidden_inverse_hidden = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_hidden)
+        # with torch.no_grad():
+        figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random, with_tfunc=True)
+        figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden, with_tfunc=True)
+        figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random, with_tfunc=False)
+        figure_ct_random_inverse_hidden = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_hidden, with_tfunc=False)
+        figure_ct_hidden_inverse_random = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_random, with_tfunc=False)
+        figure_ct_hidden_inverse_hidden = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_hidden, with_tfunc=False)
 
         if self.sh > 0:
             volume_xr_hidden_inverse = volume_xr_hidden_inverse.sum(dim=1, keepdim=True)
@@ -361,7 +371,9 @@ class NVMLightningModule(LightningModule):
             tensorboard = self.logger.experiment
             grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0)
             tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
-            tensorboard.add_histogram(f"{stage}_embeddings", self.fwd_renderer.embeddings.weight, self.current_epoch * self.batch_size + batch_idx)
+            if self.tfunc:
+                tensorboard.add_histogram(f"{stage}_embeddings", self.fwd_renderer.embeddings.weight, self.current_epoch * self.batch_size + batch_idx)
+                
         if self.phase == "direct":
             im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
                           + self.maeloss(middle_ct_hidden_inverse, image3d) \
@@ -410,10 +422,19 @@ class NVMLightningModule(LightningModule):
                           + self.maeloss(figure_ct_random_inverse_hidden, figure_ct_hidden) \
                           + self.maeloss(figure_ct_random_inverse_random, figure_ct_random) \
                           + self.maeloss(figure_xr_hidden_inverse_hidden, figure_xr_hidden) # Check here
-                          
             im2d_loss = im2d_loss_inv
             self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss = self.alpha * im3d_loss + self.gamma * im2d_loss
+            if self.perceptual2d and stage=="train":
+                perc_loss = self.pctloss(figure_ct_random, figure_xr_hidden_inverse_random) 
+                # if self.tfunc:
+                #     perc_loss += self.pctloss(figure_xr_hidden, figure_ct_hidden) 
+                self.log(f"{stage}_perc_loss", perc_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+                loss += self.delta * perc_loss
+            if self.perceptual3d and stage=="train":
+                perc_loss = self.pctloss(volume_xr_hidden_inverse, image3d)
+                self.log(f"{stage}_perc_loss", perc_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+                loss += self.delta * perc_loss
             
         return loss
 
@@ -438,16 +459,20 @@ class NVMLightningModule(LightningModule):
         self.validation_step_outputs.clear()  # free memory
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            # [
-            #     # {"params": self.fwd_renderer.parameters()},
-            #     {"params": self.inv_renderer.parameters()},
-            #     # {'params': self.unet2d_model.parameters()}, # Add diffusion model, remove lpips model
-            # ],
-            # lr=self.lr,
-            # betas=(0.9, 0.999)
-            self.parameters(), lr=self.lr, betas=(0.9, 0.999)
-        )
+        if self.tfunc:
+        #     optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, betas=(0.9, 0.999))
+        # else:
+            optimizer = torch.optim.AdamW(
+                [
+                    {"params": self.fwd_renderer.parameters()},
+                    {"params": self.inv_renderer.parameters()},
+                ],
+                lr=self.lr,
+                betas=(0.9, 0.999)
+                # 
+            )
+        else:
+            optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, betas=(0.9, 0.999))
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100, 200], gamma=0.1)
         return [optimizer], [scheduler]
 
@@ -477,6 +502,8 @@ if __name__ == "__main__":
     parser.add_argument("--test", action="store_true", help="test")
     parser.add_argument("--lpips", action="store_true", help="train with lpips xray ct random")
     parser.add_argument("--strict", action="store_true", help="checkpoint loading")
+    parser.add_argument("--perceptual2d", action="store_true", help="perceptual 2d loss")
+    parser.add_argument("--perceptual3d", action="store_true", help="perceptual 3d loss")
     parser.add_argument("--tfunc", action="store_true", help="learnable mapping")
     parser.add_argument("--phase", type=str, default="direct", help="direct|cyclic|paired")
 
@@ -539,10 +566,10 @@ if __name__ == "__main__":
         max_epochs=hparams.epochs,
         logger=[tensorboard_logger],
         callbacks=callbacks,
-        accumulate_grad_batches=4,
+        # accumulate_grad_batches=4,
         strategy="auto",  # hparams.strategy, #"auto", #"ddp_find_unused_parameters_true",
         precision=16 if hparams.amp else 32,
-        profiler="advanced",
+        # profiler="advanced",
     )
 
     # Create data module
