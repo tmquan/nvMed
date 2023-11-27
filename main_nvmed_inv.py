@@ -60,7 +60,7 @@ backbones = {
     "efficientnet-b7": (32, 48, 80, 224, 640),
     "efficientnet-b8": (32, 56, 88, 248, 704),
     "efficientnet-b9": (32, 64, 96, 256, 800),
-    # "efficientnet-b9": (64, 128, 256, 512, 1024),
+    "efficientnet-b0": (64, 128, 256, 512, 1024),
     "efficientnet-l2": (72, 104, 176, 480, 1376),
 }
 
@@ -139,23 +139,23 @@ class InverseXrayVolumeRenderer(nn.Module):
             cross_attention_dim=12,  # flatR | flatT
         )
         
-        self.net3d3d = nn.Sequential(
-            Unet(
-                spatial_dims=3, 
-                in_channels=1, 
-                out_channels=1, 
-                channels=backbones[backbone], 
-                strides=(2, 2, 2, 2, 2), 
-                num_res_units=2, 
-                kernel_size=3, 
-                up_kernel_size=3, 
-                act=("LeakyReLU", {"inplace": True}), 
-                norm=Norm.BATCH,
-                dropout=0.5
-            ),
-        )
+        # self.net3d3d = nn.Sequential(
+        #     Unet(
+        #         spatial_dims=3, 
+        #         in_channels=1, 
+        #         out_channels=1, 
+        #         channels=backbones[backbone], 
+        #         strides=(2, 2, 2, 2, 2), 
+        #         num_res_units=2, 
+        #         kernel_size=3, 
+        #         up_kernel_size=3, 
+        #         act=("LeakyReLU", {"inplace": True}), 
+        #         norm=Norm.BATCH,
+        #         dropout=0.5
+        #     ),
+        # )
         
-    def forward(self, image2d, cameras, timesteps=None, is_training=False):
+    def forward(self, image2d, cameras, resample=False, timesteps=None, is_training=False):
         _device = image2d.device
         batch = image2d.shape[0]
         dtype = image2d.dtype
@@ -163,6 +163,7 @@ class InverseXrayVolumeRenderer(nn.Module):
             timesteps = torch.zeros((batch), device=_device).long()
         
         R = cameras.R
+        # T = cameras.T.unsqueeze_(-1)
         T = torch.zeros_like(cameras.T.unsqueeze_(-1))
         
         mat = torch.cat([R, T], dim=-1)
@@ -173,30 +174,19 @@ class InverseXrayVolumeRenderer(nn.Module):
         image2d = image2d.transpose(2, 3)
         
         # Run forward pass
-        mid = self.net2d3d(
+        fov = self.net2d3d(
             x=image2d, 
             context=mat.reshape(batch, 1, -1),
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
-        # mid = self.net2d3d(image2d).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
+        
 
-        grd = F.affine_grid(inv, mid.size()).type(dtype)
-        
-        mid_resample = F.grid_sample(mid, grd)
-        # out_resample = self.net3d3d(mid_resample)
-        
-        if is_training:
-            # Randomly return out_resample or out_explicit
-            rng = torch.rand(1).item()
-            if rng > 0.5:
-                out = self.net3d3d(mid)
-                out_resample = F.grid_sample(out, grd)
-            else:
-                out_resample = self.net3d3d(mid_resample)
+        grd = F.affine_grid(inv, fov.size()).type(dtype)
+        if resample:
+            return F.grid_sample(fov, grd)
         else:
-            out_resample = self.net3d3d(mid_resample)
-        return out_resample, mid_resample
-
+            return fov 
+        
 class NVMLightningModule(LightningModule):
     def __init__(self, hparams, **kwargs) -> None:
         super().__init__()
@@ -219,8 +209,9 @@ class NVMLightningModule(LightningModule):
         self.lamda = hparams.lamda
     
         self.timesteps = hparams.timesteps
-        self.perceptual2d = hparams.perceptual2d
-        self.perceptual3d = hparams.perceptual3d
+        self.resample = hparams.resample
+        # self.perceptual2d = hparams.perceptual2d
+        # self.perceptual3d = hparams.perceptual3d
         
         self.logsdir = hparams.logsdir
         self.sh = hparams.sh
@@ -242,9 +233,6 @@ class NVMLightningModule(LightningModule):
             min_depth=2.0, 
             max_depth=10.0, 
             ndc_extent=1.0,
-            tfunc=self.tfunc,
-            data_dim=4096,
-            feat_dim=1,
         )
 
         self.inv_renderer = InverseXrayVolumeRenderer(
@@ -256,7 +244,7 @@ class NVMLightningModule(LightningModule):
             pe=self.pe, 
             backbone=self.backbone,
         )
-        init_weights(self.inv_renderer, init_type="xavier")
+        # init_weights(self.inv_renderer, init_type="xavier")
         
         if self.ckpt:
             print("Loading.. ", self.ckpt)
@@ -268,34 +256,33 @@ class NVMLightningModule(LightningModule):
         self.validation_step_outputs = []
         self.maeloss = nn.L1Loss(reduction="mean")
         
-        if self.perceptual2d:
-            self.pctloss = PerceptualLoss(
-                spatial_dims=2, 
-                network_type="radimagenet_resnet50", 
-                # network_type="resnet50", 
-                # network_type="medicalnet_resnet50_23datasets", 
-                is_fake_3d=False, 
-                pretrained=True,
-            )
-        if self.perceptual3d:
-            self.pctloss = PerceptualLoss(
-                spatial_dims=2, 
-                network_type="radimagenet_resnet50", 
-                # network_type="resnet50", 
-                # network_type="medicalnet_resnet50_23datasets", 
-                is_fake_3d=True, fake_3d_ratio=0.001,
-                pretrained=True,
-            )
-    def forward_screen(self, image3d, cameras, with_tfunc=False):
-        return self.fwd_renderer(image3d, cameras, with_tfunc=with_tfunc)
+        # if self.perceptual2d:
+        #     self.pctloss = PerceptualLoss(
+        #         spatial_dims=2, 
+        #         network_type="radimagenet_resnet50", 
+        #         # network_type="resnet50", 
+        #         # network_type="medicalnet_resnet50_23datasets", 
+        #         is_fake_3d=False, 
+        #         pretrained=True,
+        #     )
+        # if self.perceptual3d:
+        #     self.pctloss = PerceptualLoss(
+        #         spatial_dims=2, 
+        #         network_type="radimagenet_resnet50", 
+        #         # network_type="resnet50", 
+        #         # network_type="medicalnet_resnet50_23datasets", 
+        #         is_fake_3d=True, fake_3d_ratio=0.001,
+        #         pretrained=True,
+        #     )
+            
+    def forward_screen(self, image3d, cameras):
+        return self.fwd_renderer(image3d, cameras)
 
-    def forward_volume(self, image2d, cameras, n_views=[2, 1], has_middle=False, timesteps=None, is_training=False):
+    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None, is_training=False):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
-        results, middles = self.inv_renderer(image2d, cameras, timesteps, is_training)
-        if has_middle:
-            return results, middles
+        results = self.inv_renderer(image2d, cameras, resample, timesteps, is_training)
         return results
 
     def _common_step(self, batch, batch_idx, stage: Optional[str] = "evaluation"):
@@ -318,27 +305,27 @@ class NVMLightningModule(LightningModule):
         # Construct the samples in 2D
         # with torch.no_grad():
         figure_xr_hidden = image2d
-        figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random, with_tfunc=False)
-        figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden, with_tfunc=False)
+        figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
+        figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
         
         # Reconstruct the Encoder-Decoder
-        volume_dx_concat, middle_dx_concat = self.forward_volume(
+        volume_dx_concat = self.forward_volume(
             image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
             cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
             n_views=[1, 1, 1]*batchsz,
-            has_middle=True, 
+            resample=self.resample,
+            timesteps=None, 
             is_training=(stage=="train"),
         )
         volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
-        middle_xr_hidden_inverse, middle_ct_random_inverse, middle_ct_hidden_inverse = torch.split(middle_dx_concat, batchsz)
 
         # with torch.no_grad():
-        figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random, with_tfunc=True)
-        figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden, with_tfunc=True)
-        figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random, with_tfunc=False)
-        figure_ct_random_inverse_hidden = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_hidden, with_tfunc=False)
-        figure_ct_hidden_inverse_random = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_random, with_tfunc=False)
-        figure_ct_hidden_inverse_hidden = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_hidden, with_tfunc=False)
+        figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
+        figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden)
+        figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random)
+        figure_ct_random_inverse_hidden = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_hidden)
+        figure_ct_hidden_inverse_random = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_random)
+        figure_ct_hidden_inverse_hidden = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_hidden)
 
         if self.sh > 0:
             volume_xr_hidden_inverse = volume_xr_hidden_inverse.sum(dim=1, keepdim=True)
@@ -376,18 +363,14 @@ class NVMLightningModule(LightningModule):
                 
         if self.phase == "direct":
             im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
-                          + self.maeloss(middle_ct_hidden_inverse, image3d) \
-                          + self.maeloss(volume_ct_random_inverse, image3d) \
-                          + self.maeloss(middle_ct_random_inverse, image3d) 
+                          + self.maeloss(volume_ct_random_inverse, image3d) 
             im3d_loss = im3d_loss_inv
             self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss = self.alpha * im3d_loss
             
         if self.phase == "ctonly":
             im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
-                          + self.maeloss(middle_ct_hidden_inverse, image3d) \
-                          + self.maeloss(volume_ct_random_inverse, image3d) \
-                          + self.maeloss(middle_ct_random_inverse, image3d) 
+                          + self.maeloss(volume_ct_random_inverse, image3d) 
             im3d_loss = im3d_loss_inv
             self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             im2d_loss_inv = self.maeloss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) \
@@ -400,9 +383,7 @@ class NVMLightningModule(LightningModule):
             
         if self.phase == "cycle":
             im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
-                          + self.maeloss(middle_ct_hidden_inverse, image3d) \
-                          + self.maeloss(volume_ct_random_inverse, image3d) \
-                          + self.maeloss(middle_ct_random_inverse, image3d) 
+                          + self.maeloss(volume_ct_random_inverse, image3d) 
             im3d_loss = im3d_loss_inv
             self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             im2d_loss_inv = self.maeloss(figure_xr_hidden_inverse_hidden, figure_xr_hidden)
@@ -412,9 +393,7 @@ class NVMLightningModule(LightningModule):
             
         if self.phase == "ctxray":
             im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
-                          + self.maeloss(middle_ct_hidden_inverse, image3d) \
-                          + self.maeloss(volume_ct_random_inverse, image3d) \
-                          + self.maeloss(middle_ct_random_inverse, image3d) 
+                          + self.maeloss(volume_ct_random_inverse, image3d) 
             im3d_loss = im3d_loss_inv
             self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             im2d_loss_inv = self.maeloss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) \
@@ -424,18 +403,7 @@ class NVMLightningModule(LightningModule):
                           + self.maeloss(figure_xr_hidden_inverse_hidden, figure_xr_hidden) # Check here
             im2d_loss = im2d_loss_inv
             self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            loss = self.alpha * im3d_loss + self.gamma * im2d_loss
-            if self.perceptual2d and stage=="train":
-                perc_loss = self.pctloss(figure_ct_random, figure_xr_hidden_inverse_random) 
-                # if self.tfunc:
-                #     perc_loss += self.pctloss(figure_xr_hidden, figure_ct_hidden) 
-                self.log(f"{stage}_perc_loss", perc_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-                loss += self.delta * perc_loss
-            if self.perceptual3d and stage=="train":
-                perc_loss = self.pctloss(volume_xr_hidden_inverse, image3d)
-                self.log(f"{stage}_perc_loss", perc_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-                loss += self.delta * perc_loss
-            
+            loss = self.alpha * im3d_loss + self.gamma * im2d_loss            
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -504,7 +472,7 @@ if __name__ == "__main__":
     parser.add_argument("--strict", action="store_true", help="checkpoint loading")
     parser.add_argument("--perceptual2d", action="store_true", help="perceptual 2d loss")
     parser.add_argument("--perceptual3d", action="store_true", help="perceptual 3d loss")
-    parser.add_argument("--tfunc", action="store_true", help="learnable mapping")
+    parser.add_argument("--resample", action="store_true", help="resample")
     parser.add_argument("--phase", type=str, default="direct", help="direct|cyclic|paired")
 
     parser.add_argument("--alpha", type=float, default=1.0, help="vol loss")
