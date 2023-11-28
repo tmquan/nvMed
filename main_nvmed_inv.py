@@ -416,11 +416,11 @@ class NVMLightningModule(LightningModule):
             im2d_loss = im2d_loss_inv
             self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss = self.alpha * im3d_loss + self.gamma * im2d_loss        
-        if self.perceptual2d:
+        if self.perceptual2d and stage=="train":
             pc2d_loss = self.p2dloss(figure_xr_hidden_inverse_random, figure_ct_random)
             self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.delta * pc2d_loss    
-        if self.perceptual3d:
+        if self.perceptual3d and stage=="train":
             pc3d_loss = self.p3dloss(volume_xr_hidden_inverse, image3d)
             self.log(f"{stage}_pc3d_loss", pc3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.delta * pc3d_loss    
