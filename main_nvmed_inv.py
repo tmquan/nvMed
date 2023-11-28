@@ -169,10 +169,6 @@ class InverseXrayVolumeRenderer(nn.Module):
         mat = torch.cat([R, T], dim=-1)
         inv = torch.cat([torch.inverse(R), -T], dim=-1)
         
-        # Transpose on the fly to make it homogeneous
-        image2d = torch.flip(image2d, [2, 3])
-        image2d = image2d.transpose(2, 3)
-        
         # Run forward pass
         fov = self.net2d3d(
             x=image2d, 
@@ -210,8 +206,8 @@ class NVMLightningModule(LightningModule):
     
         self.timesteps = hparams.timesteps
         self.resample = hparams.resample
-        # self.perceptual2d = hparams.perceptual2d
-        # self.perceptual3d = hparams.perceptual3d
+        self.perceptual2d = hparams.perceptual2d
+        self.perceptual3d = hparams.perceptual3d
         
         self.logsdir = hparams.logsdir
         self.sh = hparams.sh
@@ -255,24 +251,25 @@ class NVMLightningModule(LightningModule):
         self.validation_step_outputs = []
         self.maeloss = nn.L1Loss(reduction="mean")
         
-        # if self.perceptual2d:
-        #     self.pctloss = PerceptualLoss(
-        #         spatial_dims=2, 
-        #         network_type="radimagenet_resnet50", 
-        #         # network_type="resnet50", 
-        #         # network_type="medicalnet_resnet50_23datasets", 
-        #         is_fake_3d=False, 
-        #         pretrained=True,
-        #     )
-        # if self.perceptual3d:
-        #     self.pctloss = PerceptualLoss(
-        #         spatial_dims=2, 
-        #         network_type="radimagenet_resnet50", 
-        #         # network_type="resnet50", 
-        #         # network_type="medicalnet_resnet50_23datasets", 
-        #         is_fake_3d=True, fake_3d_ratio=0.001,
-        #         pretrained=True,
-        #     )
+        if self.perceptual2d:
+            self.p2dloss = PerceptualLoss(
+                spatial_dims=2, 
+                network_type="radimagenet_resnet50", 
+                # network_type="resnet50", 
+                # network_type="medicalnet_resnet50_23datasets", 
+                is_fake_3d=False, 
+                pretrained=True,
+            )
+        if self.perceptual3d:
+            self.p3dloss = PerceptualLoss(
+                spatial_dims=3, 
+                network_type="radimagenet_resnet50", 
+                # network_type="resnet50", 
+                # network_type="medicalnet_resnet50_23datasets", 
+                is_fake_3d=True, fake_3d_ratio=0.0625, # 16/256
+                pretrained=True,
+            )
+        
     def correct_window(self, T_old, a_min=-1024, a_max=3071, b_min=-512, b_max=3072):
         # Calculate the range for the old and new scales
         range_old = a_max - a_min
@@ -291,6 +288,14 @@ class NVMLightningModule(LightningModule):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
+        
+        # Transpose on the fly to make it homogeneous
+        if self.resample:
+            image2d = torch.flip(image2d, [2, 3])
+        else:
+            image2d = torch.flip(image2d, [3])
+        image2d = image2d.transpose(2, 3)
+        
         results = self.inv_renderer(image2d, cameras, resample, timesteps, is_training)
         return results
 
@@ -410,7 +415,15 @@ class NVMLightningModule(LightningModule):
                           + self.maeloss(figure_xr_hidden_inverse_hidden, figure_xr_hidden) # Check here
             im2d_loss = im2d_loss_inv
             self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            loss = self.alpha * im3d_loss + self.gamma * im2d_loss            
+            loss = self.alpha * im3d_loss + self.gamma * im2d_loss        
+        if self.perceptual2d:
+            pc2d_loss = self.p2dloss(figure_xr_hidden_inverse_random, figure_ct_random)
+            self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            loss += self.delta * pc2d_loss    
+        if self.perceptual3d:
+            pc3d_loss = self.p3dloss(volume_xr_hidden_inverse, image3d)
+            self.log(f"{stage}_pc3d_loss", pc3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            loss += self.delta * pc3d_loss    
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -518,7 +531,7 @@ if __name__ == "__main__":
     early_stop_callback = EarlyStopping(
         monitor="validation_loss_epoch",  # The quantity to be monitored
         min_delta=0.00,  # Minimum change in the monitored quantity to qualify as an improvement
-        patience=10,  # Number of epochs with no improvement after which training will be stopped
+        patience=20,  # Number of epochs with no improvement after which training will be stopped
         verbose=True,  # Whether to print logs in stdout
         mode="min",  # In 'min' mode, training will stop when the quantity monitored has stopped decreasing
     )
