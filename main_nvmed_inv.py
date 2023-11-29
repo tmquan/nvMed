@@ -334,16 +334,15 @@ class NVMLightningModule(LightningModule):
             )
             volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
             
-            with torch.no_grad():
-                # Reconstruct the Encoder-Decoder
-                volume_xr_hidden_inverse = self.forward_volume(
-                    image2d=torch.cat([figure_xr_hidden]), 
-                    cameras=join_cameras_as_batch([view_hidden]), 
-                    n_views=[1]*batchsz,
-                    resample=self.resample,
-                    timesteps=None, 
-                    is_training=(stage=="train"),
-                )
+            # Reconstruct the Encoder-Decoder
+            volume_xr_hidden_inverse = self.forward_volume(
+                image2d=torch.cat([figure_xr_hidden]), 
+                cameras=join_cameras_as_batch([view_hidden]), 
+                n_views=[1]*batchsz,
+                resample=self.resample,
+                timesteps=None, 
+                is_training=(stage=="train"),
+            )
         
         elif self.phase=="ctxray":
             # Reconstruct the Encoder-Decoder
