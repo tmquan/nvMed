@@ -270,7 +270,7 @@ class NVMLightningModule(LightningModule):
                 pretrained=True,
             )
         
-    def correct_window(self, T_old, a_min=-1024, a_max=3071, b_min=-512, b_max=3072):
+    def correct_window(self, T_old, a_min=-1024, a_max=3071, b_min=-512, b_max=3071):
         # Calculate the range for the old and new scales
         range_old = a_max - a_min
         range_new = b_max - b_min
@@ -281,7 +281,7 @@ class NVMLightningModule(LightningModule):
         return T_new.clamp_(0, 1)
        
     def forward_screen(self, image3d, cameras):
-        windowed = self.correct_window(image3d, a_min=-1024, a_max=3071, b_min=-500, b_max=3072)
+        windowed = self.correct_window(image3d, a_min=-1024, a_max=3071, b_min=-600, b_max=3071)
         return self.fwd_renderer(windowed, cameras)
 
     def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None, is_training=False):
@@ -322,17 +322,41 @@ class NVMLightningModule(LightningModule):
         figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
         figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
         
-        # Reconstruct the Encoder-Decoder
-        volume_dx_concat = self.forward_volume(
-            image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
-            cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-            n_views=[1, 1, 1]*batchsz,
-            resample=self.resample,
-            timesteps=None, 
-            is_training=(stage=="train"),
-        )
-        volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
-
+        if self.phase=="direct" or self.phase=="ctonly":
+            # Reconstruct the Encoder-Decoder
+            volume_dx_concat = self.forward_volume(
+                image2d=torch.cat([figure_ct_random, figure_ct_hidden]), 
+                cameras=join_cameras_as_batch([view_random, view_hidden]), 
+                n_views=[1, 1]*batchsz,
+                resample=self.resample,
+                timesteps=None, 
+                is_training=(stage=="train"),
+            )
+            volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
+            
+            with torch.no_grad():
+                # Reconstruct the Encoder-Decoder
+                volume_xr_hidden_inverse = self.forward_volume(
+                    image2d=torch.cat([figure_xr_hidden]), 
+                    cameras=join_cameras_as_batch([view_hidden]), 
+                    n_views=[1]*batchsz,
+                    resample=self.resample,
+                    timesteps=None, 
+                    is_training=(stage=="train"),
+                )
+        
+        elif self.phase=="ctxray":
+            # Reconstruct the Encoder-Decoder
+            volume_dx_concat = self.forward_volume(
+                image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
+                cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+                n_views=[1, 1, 1]*batchsz,
+                resample=self.resample,
+                timesteps=None, 
+                is_training=(stage=="train"),
+            )
+            volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
+        
         # with torch.no_grad():
         figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
         figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden)
