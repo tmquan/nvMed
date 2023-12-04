@@ -38,3 +38,11 @@ python -c 'import torch; torch.randn(1, device="cuda:0")'
 python -c "import torch; import monai; from monai.config import print_config; print_config()"
 python -c "import torch; import pytorch3d; from monai.config import print_config; print_config()"
 ```
+
+
+```
+env CUDA_VISIBLE_DEVICES='4,5,6,7' CUDA_LAUNCH_BLOCKING=1  python main_nvmed_inv.py --accelerator='gpu' --devices=4 --batch_size=2 --lr=1e-4 --epochs=201 --logsdir=/home/quantm/logs/b0_nvmed --datadir=/home/quantm/data --train_samples=4000 --val_samples=800 --n_pts_per_ray=400 --vol_shape=256 --img_shape=256 --fov_depth=256 --alpha=1 --theta=1 --gamma=1 --delta=0.002 --omega=1 --lamda=1 --sh=0 --pe=0 --prediction_type='sample' --amp --strategy=auto --backbone='efficientnet-b0' --resample --phase=ctonly 
+
+env CUDA_VISIBLE_DEVICES='4,5,6,7' CUDA_LAUNCH_BLOCKING=1  python main_nvmed_inv.py --accelerator='gpu' --devices=4 --batch_size=2 --lr=1e-4 --epochs=201 --logsdir=/home/quantm/logs/b0_nvmed --datadir=/home/quantm/data --train_samples=4000 --val_samples=800 --n_pts_per_ray=256 --vol_shape=256 --img_shape=256 --fov_depth=256 --alpha=1 --theta=1 --gamma=1 --delta=0.002 --omega=1 --lamda=1 --sh=0 --pe=0 --prediction_type='sample' --amp --strategy=auto --backbone='efficientnet-b0' --resample --phase=ctxray --tfunc --perceptual --ckpt=/home/quantm/logs/b0_nvmed_resample_ctonly/epoch=149-step=75000.ckpt 
+
+```
