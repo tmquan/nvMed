@@ -180,7 +180,7 @@ class UnpairedDataModule(LightningDataModule):
                         #         b_max=1.0),
                         ScaleIntensityRangeDict(
                             keys=["image3d"],
-                            clip=True,
+                            clip=False,
                             a_min=-1024,
                             a_max=3071,
                             b_min=0.0,
@@ -286,7 +286,7 @@ class UnpairedDataModule(LightningDataModule):
         self.train_loader = DataLoader(
             self.train_datasets,
             batch_size=self.batch_size,
-            num_workers=48,
+            num_workers=32,
             collate_fn=list_data_collate,
             shuffle=True,
         )
@@ -339,7 +339,7 @@ class UnpairedDataModule(LightningDataModule):
                         #         b_max=1.0),
                         ScaleIntensityRangeDict(
                             keys=["image3d"],
-                            clip=True,
+                            clip=False,
                             a_min=-1024,
                             a_max=3071,
                             b_min=0.0,
@@ -459,7 +459,7 @@ class UnpairedDataModule(LightningDataModule):
                         #         b_max=1.0),
                         ScaleIntensityRangeDict(
                             keys=["image3d"],
-                            clip=True,
+                            clip=False,
                             a_min=-1024,
                             a_max=3071,
                             b_min=0.0,
