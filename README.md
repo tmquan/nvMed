@@ -28,7 +28,7 @@ pip install -U gdown
 pip install -U itk
 
 pip install -U git+https://github.com/Project-MONAI/GenerativeModels.git 
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu114
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
 

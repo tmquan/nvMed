@@ -175,13 +175,12 @@ class InverseXrayVolumeRenderer(nn.Module):
         # Run forward pass
         fov = self.net2d3d(
             x=image2d, 
-            context=mat.reshape(batch, 1, -1),
+            context=inv.reshape(batch, 1, -1),
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
-        
 
-        grd = F.affine_grid(inv, fov.size()).type(dtype)
         if resample:
+            grd = F.affine_grid(inv, fov.size()).type(dtype)
             return F.grid_sample(fov, grd)
         else:
             return fov 
@@ -193,7 +192,7 @@ class FlexiblePerceptualLoss(PerceptualLoss):
     def forward(self, source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         if target.shape != source.shape:
             raise ValueError(f"ground truth has differing shape ({target.shape}) from source ({source.shape})")
-
+        self.perceptual_function.eval()
         if len(source.shape) == 5:
             # Compute 2.5D approach
             loss_sagittal = self._calculate_axis_loss(source, target, spatial_axis=2)
@@ -506,7 +505,7 @@ class NVMLightningModule(LightningModule):
             pc3d_loss = self.pctloss(volume_xr_hidden_inverse, image3d) 
             self.log(f"{stage}_pc3d_loss", pc3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.delta * pc3d_loss    
-        if self.ssim:
+        if self.ssim and stage=="train":
             si2d_loss = self.s2dloss(figure_xr_hidden_inverse_random, figure_ct_random) 
             self.log(f"{stage}_si2d_loss", si2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.omega * si2d_loss    
@@ -538,11 +537,13 @@ class NVMLightningModule(LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            [
-                {"params": self.fwd_renderer.parameters()},
-                # {"params": self.emb_function.parameters()}, 
-                {"params": self.inv_renderer.parameters()},
-            ],
+            # [
+            #     # {"params": self.fwd_renderer.parameters()},
+            #     # {"params": self.emb_function.parameters()}, 
+            #     {"params": self.inv_renderer.parameters()},
+            # ],
+            self.inv_renderer.parameters(),
+            # self.parameters(),
             lr=self.lr,
             betas=(0.9, 0.999)
             # 
