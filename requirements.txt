@@ -1,0 +1,142 @@
+absl-py==2.0.0
+aiohttp==3.9.1
+aiosignal==1.3.1
+alembic==1.13.0
+attrs==23.1.0
+beautifulsoup4==4.12.2
+blinker==1.7.0
+Brotli @ file:///work/ci_py311/brotli-split_1676830125088/work
+cachetools==5.3.2
+certifi @ file:///croot/certifi_1700501669400/work/certifi
+cffi @ file:///croot/cffi_1700254295673/work
+charset-normalizer @ file:///tmp/build/80754af9/charset-normalizer_1630003229654/work
+clearml==1.13.2
+click==8.1.7
+cloudpickle==3.0.0
+contourpy==1.2.0
+cryptography @ file:///croot/cryptography_1702070282333/work
+cycler==0.12.1
+databricks-cli==0.18.0
+diffusers==0.24.0
+docker==6.1.3
+einops==0.7.0
+entrypoints==0.4
+filelock @ file:///croot/filelock_1700591183607/work
+Flask==3.0.0
+fonttools==4.46.0
+frozenlist==1.4.0
+fsspec==2023.12.2
+furl==2.1.3
+fvcore==0.1.5.post20221221
+gdown==4.7.1
+gitdb==4.0.11
+GitPython==3.1.40
+gmpy2 @ file:///work/ci_py311/gmpy2_1676839849213/work
+google-auth==2.25.2
+google-auth-oauthlib==1.1.0
+greenlet==3.0.2
+grpcio==1.60.0
+gunicorn==21.2.0
+huggingface-hub==0.19.4
+idna @ file:///work/ci_py311/idna_1676822698822/work
+imageio==2.33.1
+importlib-metadata==7.0.0
+iopath==0.1.10
+itk==5.3.0
+itk-core==5.3.0
+itk-filtering==5.3.0
+itk-io==5.3.0
+itk-numerics==5.3.0
+itk-registration==5.3.0
+itk-segmentation==5.3.0
+itsdangerous==2.1.2
+Jinja2 @ file:///work/ci_py311/jinja2_1676823587943/work
+joblib==1.3.2
+jsonschema==4.20.0
+jsonschema-specifications==2023.11.2
+kiwisolver==1.4.5
+lazy_loader==0.3
+lightning==2.1.2
+lightning-utilities==0.10.0
+lmdb==1.4.1
+Mako==1.3.0
+Markdown==3.5.1
+MarkupSafe @ file:///work/ci_py311/markupsafe_1676823507015/work
+matplotlib==3.8.2
+mkl-fft @ file:///croot/mkl_fft_1695058164594/work
+mkl-random @ file:///croot/mkl_random_1695059800811/work
+mkl-service==2.4.0
+mlflow==2.9.1
+monai==1.3.0
+monai-generative @ git+https://github.com/Project-MONAI/GenerativeModels.git@85796f8e3d5bf4a35dab24210de83266c81c47cf
+mpmath @ file:///croot/mpmath_1690848262763/work
+multidict==6.0.4
+networkx @ file:///croot/networkx_1690561992265/work
+nibabel==5.2.0
+nptyping==2.5.0
+numpy==1.26.2
+oauthlib==3.2.2
+orderedmultidict==1.0.1
+packaging==23.2
+pandas==2.1.4
+pathlib2==2.3.7.post1
+Pillow==10.1.0
+plotly==5.18.0
+portalocker==2.8.2
+protobuf==4.23.4
+psutil==5.9.6
+pyarrow==14.0.1
+pyasn1==0.5.1
+pyasn1-modules==0.3.0
+pycparser @ file:///tmp/build/80754af9/pycparser_1636541352034/work
+PyJWT==2.8.0
+pynrrd==1.0.0
+pyOpenSSL @ file:///croot/pyopenssl_1690223430423/work
+pyparsing==3.1.1
+PySocks @ file:///work/ci_py311/pysocks_1676822712504/work
+python-dateutil==2.8.2
+pytorch-ignite==0.4.13
+pytorch-lightning==2.1.2
+pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@06cdc313a7996a3363e78b19edaf893f4454ba1c
+pytz==2023.3.post1
+PyYAML==6.0.1
+querystring-parser==1.2.4
+referencing==0.32.0
+regex==2023.10.3
+requests @ file:///croot/requests_1690400202158/work
+requests-oauthlib==1.3.1
+rpds-py==0.13.2
+rsa==4.9
+safetensors==0.4.1
+scikit-image==0.22.0
+scikit-learn==1.3.2
+scipy==1.11.4
+six==1.16.0
+smmap==5.0.1
+soupsieve==2.5
+SQLAlchemy==2.0.23
+sqlparse==0.4.4
+sympy @ file:///croot/sympy_1701397643339/work
+tabulate==0.9.0
+tenacity==8.2.3
+tensorboard==2.15.1
+tensorboard-data-server==0.7.2
+termcolor==2.4.0
+threadpoolctl==3.2.0
+tifffile==2023.12.9
+tokenizers==0.15.0
+torch==2.1.1
+torchaudio==2.1.1
+torchmetrics==1.2.1
+torchvision==0.16.1
+tqdm==4.66.1
+transformers==4.36.0
+triton==2.1.0
+typing_extensions==4.9.0
+tzdata==2023.3
+urllib3 @ file:///croot/urllib3_1698257533958/work
+websocket-client==1.7.0
+Werkzeug==3.0.1
+yacs==0.1.8
+yarl==1.9.4
+zipp==3.17.0

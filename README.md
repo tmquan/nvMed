@@ -5,11 +5,9 @@ Novel View Medical Image Reconstruction
 git clone https://github.com/tmquan/nvmed
 conda create -n py311 python=3.11
 conda activate py311
+
 pip install -U pip 
 pip install -U transformers
-curl https://sh.rustup.rs -sSf | sh
-source "$HOME/.cargo/env"
-rustc -V
 pip install -U plotly
 pip install -U diffusers
 pip install -U lightning
