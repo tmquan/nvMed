@@ -454,13 +454,13 @@ class NVMLightningModule(LightningModule):
         volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5
         figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
         # figure_xr_latent_hidden = torch.randn_like(image2d)
-        figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d, noise=figure_xr_latent_hidden, timesteps=timesteps)
+        figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d * 2.0 - 1.0, noise=figure_xr_latent_hidden * 2.0 - 1.0, timesteps=timesteps) * 0.5 + 0.5
 
         volume_ct_latent = torch.randn_like(image3d) * 0.5 + 0.5
         figure_ct_latent_random = self.forward_screen(image3d=volume_ct_latent, cameras=view_random)
         figure_ct_latent_hidden = self.forward_screen(image3d=volume_ct_latent, cameras=view_hidden)
 
-        volume_ct_interp = self.ddpmsch.add_noise(original_samples=image3d, noise=volume_ct_latent, timesteps=timesteps)
+        volume_ct_interp = self.ddpmsch.add_noise(original_samples=image3d * 2.0 - 1.0, noise=volume_ct_latent * 2.0 - 1.0, timesteps=timesteps) * 0.5 + 0.5
         figure_ct_interp_random = self.forward_screen(image3d=volume_ct_interp, cameras=view_random)
         figure_ct_interp_hidden = self.forward_screen(image3d=volume_ct_interp, cameras=view_hidden)
   
