@@ -451,15 +451,14 @@ class NVMLightningModule(LightningModule):
         # @ Diffusion step: 2 kinds of blending
         timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long()  # 3 views
 
+        # figure_xr_latent_hidden = torch.randn_like(image2d)
         volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5
         figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
-        # figure_xr_latent_hidden = torch.randn_like(image2d)
         figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d * 2.0 - 1.0, noise=figure_xr_latent_hidden * 2.0 - 1.0, timesteps=timesteps) * 0.5 + 0.5
 
         volume_ct_latent = torch.randn_like(image3d) * 0.5 + 0.5
-        figure_ct_latent_random = self.forward_screen(image3d=volume_ct_latent, cameras=view_random)
-        figure_ct_latent_hidden = self.forward_screen(image3d=volume_ct_latent, cameras=view_hidden)
-
+        # figure_ct_latent_random = self.forward_screen(image3d=volume_ct_latent, cameras=view_random)
+        # figure_ct_latent_hidden = self.forward_screen(image3d=volume_ct_latent, cameras=view_hidden)
         volume_ct_interp = self.ddpmsch.add_noise(original_samples=image3d * 2.0 - 1.0, noise=volume_ct_latent * 2.0 - 1.0, timesteps=timesteps) * 0.5 + 0.5
         figure_ct_interp_random = self.forward_screen(image3d=volume_ct_interp, cameras=view_random)
         figure_ct_interp_hidden = self.forward_screen(image3d=volume_ct_interp, cameras=view_hidden)
