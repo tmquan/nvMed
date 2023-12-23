@@ -313,6 +313,15 @@ class NVMLightningModule(LightningModule):
         self.validation_step_outputs = []
         self.maeloss = nn.L1Loss(reduction="mean")
         
+        if self.perceptual2d:
+            self.pctloss = FlexiblePerceptualLoss(
+                spatial_dims=2, 
+                network_type="radimagenet_resnet50", 
+                # network_type="resnet50", 
+                # network_type="medicalnet_resnet50_23datasets", 
+                is_fake_3d=False, # fake_3d_ratio=20/256, # 0.0625, # 16/256
+                pretrained=True,
+            )
         if self.perceptual:
             self.pctloss = FlexiblePerceptualLoss(
                 spatial_dims=3, 
@@ -457,8 +466,8 @@ class NVMLightningModule(LightningModule):
         figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d * 2.0 - 1.0, noise=figure_xr_latent_hidden * 2.0 - 1.0, timesteps=timesteps) * 0.5 + 0.5
 
         volume_ct_latent = torch.randn_like(image3d) * 0.5 + 0.5
-        # figure_ct_latent_random = self.forward_screen(image3d=volume_ct_latent, cameras=view_random)
-        # figure_ct_latent_hidden = self.forward_screen(image3d=volume_ct_latent, cameras=view_hidden)
+        figure_ct_latent_random = self.forward_screen(image3d=volume_ct_latent, cameras=view_random)
+        figure_ct_latent_hidden = self.forward_screen(image3d=volume_ct_latent, cameras=view_hidden)
         volume_ct_interp = self.ddpmsch.add_noise(original_samples=image3d * 2.0 - 1.0, noise=volume_ct_latent * 2.0 - 1.0, timesteps=timesteps) * 0.5 + 0.5
         figure_ct_interp_random = self.forward_screen(image3d=volume_ct_interp, cameras=view_random)
         figure_ct_interp_hidden = self.forward_screen(image3d=volume_ct_interp, cameras=view_hidden)
@@ -610,55 +619,16 @@ class NVMLightningModule(LightningModule):
             tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
             if self.tfunc:
                 tensorboard.add_histogram(f"{stage}_emb_function", self.emb_function.weight, self.current_epoch * self.batch_size + batch_idx)
-                
-        if self.phase == "direct":
-            im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
-                          + self.maeloss(volume_ct_random_inverse, image3d) 
-            im3d_loss = im3d_loss_inv
-            self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            loss = self.alpha * im3d_loss
-            
+                       
         if self.phase == "ctonly":
-            # im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
-            #               + self.maeloss(volume_ct_random_inverse, image3d) 
-            # im3d_loss = im3d_loss_inv + im3d_loss_dif
-            # self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            # im2d_loss_inv = self.maeloss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) \
-            #               + self.maeloss(figure_ct_hidden_inverse_random, figure_ct_random) \
-            #               + self.maeloss(figure_ct_random_inverse_hidden, figure_ct_hidden) \
-            #               + self.maeloss(figure_ct_random_inverse_random, figure_ct_random) 
-            # im2d_loss = im2d_loss_inv + im2d_loss_dif
-            # self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            # loss = self.alpha * im3d_loss + self.gamma * im2d_loss
             im3d_loss = im3d_loss_dif
             self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             im2d_loss = im2d_loss_dif
             self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss = self.alpha * im3d_loss + self.gamma * im2d_loss
             
-        if self.phase == "cycle":
-            im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
-                          + self.maeloss(volume_ct_random_inverse, image3d) 
-            im3d_loss = im3d_loss_inv
-            self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            im2d_loss_inv = self.maeloss(figure_xr_hidden_inverse_hidden, figure_xr_hidden)
-            im2d_loss = im2d_loss_inv
-            self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            loss = self.alpha * im3d_loss + self.gamma * im2d_loss
-            
+
         if self.phase == "ctxray":
-            # im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
-            #               + self.maeloss(volume_ct_random_inverse, image3d) 
-            # im3d_loss = im3d_loss_inv + im3d_loss_dif
-            # self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            # im2d_loss_inv = self.maeloss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) \
-            #               + self.maeloss(figure_ct_hidden_inverse_random, figure_ct_random) \
-            #               + self.maeloss(figure_ct_random_inverse_hidden, figure_ct_hidden) \
-            #               + self.maeloss(figure_ct_random_inverse_random, figure_ct_random) \
-            #               + self.maeloss(figure_xr_hidden_inverse_hidden, figure_xr_hidden) # Check here
-            # im2d_loss = im2d_loss_inv + im2d_loss_dif
-            # self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            # loss = self.alpha * im3d_loss + self.gamma * im2d_loss      
             im3d_loss = im3d_loss_dif
             self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             im2d_loss = im2d_loss_dif
@@ -666,28 +636,34 @@ class NVMLightningModule(LightningModule):
             loss = self.alpha * im3d_loss + self.gamma * im2d_loss
             
         # if self.current_epoch < 21: # Warmup
-        #     loss += 0.1 * self.maeloss(volume_xr_hidden_inverse, image3d) 
-        #     loss += 0.1 * self.maeloss(figure_xr_hidden_inverse_random, figure_ct_random) 
-        # if self.perceptual2d and stage=="train":
-        #     pc2d_loss = self.p2dloss(figure_xr_hidden_inverse_random, figure_ct_random)
-        #     self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-        #     loss += self.delta * pc2d_loss    
-        # if self.perceptual3d and stage=="train":
-        #     pc3d_loss = self.p3dloss(volume_xr_hidden_inverse, image3d)
-        #     self.log(f"{stage}_pc3d_loss", pc3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-        #     loss += self.delta * pc3d_loss 
-        if self.perceptual and stage=="train":
-            pc2d_loss = self.pctloss(figure_xr_hidden_inverse_random, figure_ct_random) 
+        #     loss += 0.1 * self.maeloss(volume_xr_hidden_output, image3d) 
+        #     loss += 0.1 * self.maeloss(figure_xr_hidden_output_random, figure_ct_random) 
+        if self.perceptual2d and stage=="train":
+            pc2d_loss = self.pctloss(figure_xr_hidden_output_random, figure_ct_random) \
+                      + self.pctloss(figure_xr_hidden_output_hidden, figure_ct_hidden) \
+                      + self.pctloss(figure_xr_hidden_output_hidden, image2d) 
             self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.delta * pc2d_loss    
-            pc3d_loss = self.pctloss(volume_xr_hidden_inverse, image3d) 
+        if self.perceptual3d and stage=="train":
+            pc3d_loss = self.p3dloss(volume_xr_hidden_output, image3d)
+            self.log(f"{stage}_pc3d_loss", pc3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            loss += self.delta * pc3d_loss 
+        if self.perceptual and stage=="train":
+            pc2d_loss = self.pctloss(figure_xr_hidden_output_random, figure_ct_random) \
+                      + self.pctloss(figure_xr_hidden_output_hidden, figure_ct_hidden) \
+                      + self.pctloss(figure_xr_hidden_output_hidden, image2d) 
+            self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            loss += self.delta * pc2d_loss    
+            pc3d_loss = self.pctloss(volume_xr_hidden_output, image3d) 
             self.log(f"{stage}_pc3d_loss", pc3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.delta * pc3d_loss    
         if self.ssim and stage=="train":
-            si2d_loss = self.s2dloss(figure_xr_hidden_inverse_random, figure_ct_random) 
+            si2d_loss = self.s2dloss(figure_xr_hidden_output_random, figure_ct_random) \
+                      + self.s2dloss(figure_xr_hidden_output_hidden, figure_ct_hidden) \
+                      + self.s2dloss(figure_xr_hidden_output_hidden, image2d) 
             self.log(f"{stage}_si2d_loss", si2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.omega * si2d_loss    
-            si3d_loss = self.s3dloss(volume_xr_hidden_inverse, image3d) 
+            si3d_loss = self.s3dloss(volume_xr_hidden_output, image3d) 
             self.log(f"{stage}_si3d_loss", si3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.omega * si3d_loss    
             
@@ -715,13 +691,15 @@ class NVMLightningModule(LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            # [
-            #     # {"params": self.fwd_renderer.parameters()},
-            #     # {"params": self.emb_function.parameters()}, 
-            #     {"params": self.inv_renderer.parameters()},
-            # ],
+            [
+                # {"params": self.fwd_renderer.parameters()},
+                # {"params": self.emb_function.parameters()}, 
+                {"params": self.unet2d_model.parameters()},
+                {"params": self.inv_renderer.parameters()},
+            ],
+            # self.unet2d_model.parameters(),
             # self.inv_renderer.parameters(),
-            self.parameters(),
+            # self.parameters(),
             lr=self.lr,
             betas=(0.9, 0.999)
             # 
