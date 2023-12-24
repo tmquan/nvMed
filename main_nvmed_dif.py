@@ -641,7 +641,9 @@ class NVMLightningModule(LightningModule):
         if self.perceptual2d and stage=="train":
             pc2d_loss = self.pctloss(figure_xr_hidden_output_random, figure_ct_random) \
                       + self.pctloss(figure_xr_hidden_output_hidden, figure_ct_hidden) \
-                      + self.pctloss(figure_xr_hidden_output_hidden, image2d) 
+                      + self.pctloss(figure_xr_hidden_output_hidden, image2d) \
+                      + self.pctloss(figure_xr_output_hidden, figure_ct_hidden) \
+                      + self.pctloss(figure_xr_output_hidden, image2d) 
             self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.delta * pc2d_loss    
         if self.perceptual3d and stage=="train":
