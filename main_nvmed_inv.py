@@ -442,13 +442,6 @@ class NVMLightningModule(LightningModule):
             tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
             if self.tfunc:
                 tensorboard.add_histogram(f"{stage}_emb_function", self.emb_function.weight, self.current_epoch * self.batch_size + batch_idx)
-                
-        if self.phase == "direct":
-            im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
-                          + self.maeloss(volume_ct_random_inverse, image3d) 
-            im3d_loss = im3d_loss_inv
-            self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            loss = self.alpha * im3d_loss
             
         if self.phase == "ctonly":
             im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
@@ -463,44 +456,8 @@ class NVMLightningModule(LightningModule):
             self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss = self.alpha * im3d_loss + self.gamma * im2d_loss
             
-        if self.phase == "cycle":
-            im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
-                          + self.maeloss(volume_ct_random_inverse, image3d) 
-            im3d_loss = im3d_loss_inv
-            self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            im2d_loss_inv = self.maeloss(figure_xr_hidden_inverse_hidden, figure_xr_hidden)
-            im2d_loss = im2d_loss_inv
-            self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            loss = self.alpha * im3d_loss + self.gamma * im2d_loss
-            
-        if self.phase == "ctxray":
-            im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
-                          + self.maeloss(volume_ct_random_inverse, image3d) 
-            im3d_loss = im3d_loss_inv
-            self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            im2d_loss_inv = self.maeloss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) \
-                          + self.maeloss(figure_ct_hidden_inverse_random, figure_ct_random) \
-                          + self.maeloss(figure_ct_random_inverse_hidden, figure_ct_hidden) \
-                          + self.maeloss(figure_ct_random_inverse_random, figure_ct_random) \
-                          + self.maeloss(figure_xr_hidden_inverse_hidden, figure_xr_hidden) # Check here
-            im2d_loss = im2d_loss_inv
-            self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            loss = self.alpha * im3d_loss + self.gamma * im2d_loss      
-            
-        # if self.current_epoch < 21: # Warmup
-        #     loss += 0.1 * self.maeloss(volume_xr_hidden_inverse, image3d) 
-        #     loss += 0.1 * self.maeloss(figure_xr_hidden_inverse_random, figure_ct_random) 
-        # if self.perceptual2d and stage=="train":
-        #     pc2d_loss = self.p2dloss(figure_xr_hidden_inverse_random, figure_ct_random)
-        #     self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-        #     loss += self.delta * pc2d_loss    
-        # if self.perceptual3d and stage=="train":
-        #     pc3d_loss = self.p3dloss(volume_xr_hidden_inverse, image3d)
-        #     self.log(f"{stage}_pc3d_loss", pc3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-        #     loss += self.delta * pc3d_loss 
         if self.perceptual and stage=="train":
             pc2d_loss = self.pctloss(figure_xr_hidden_inverse_random, figure_ct_random) \
-                      + self.pctloss(figure_xr_hidden_inverse_hidden, figure_ct_hidden) \
                       + self.pctloss(figure_xr_hidden_inverse_hidden, image2d) 
             self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.delta * pc2d_loss    
@@ -509,7 +466,6 @@ class NVMLightningModule(LightningModule):
             loss += self.delta * pc3d_loss    
         if self.ssim and stage=="train":
             si2d_loss = self.s2dloss(figure_xr_hidden_inverse_random, figure_ct_random) \
-                      + self.s2dloss(figure_xr_hidden_inverse_hidden, figure_ct_hidden) \
                       + self.s2dloss(figure_xr_hidden_inverse_hidden, image2d) 
             self.log(f"{stage}_si2d_loss", si2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.omega * si2d_loss    
