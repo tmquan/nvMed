@@ -185,9 +185,12 @@ class FlexiblePerceptualLoss(PerceptualLoss):
     def __init__(self,*args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         
-    def forward(self, source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, source: torch.Tensor, target: torch.Tensor, tanh=True) -> torch.Tensor:
         if target.shape != source.shape:
             raise ValueError(f"ground truth has differing shape ({target.shape}) from source ({source.shape})")
+        if tanh:
+            source = source * 0.5 + 0.5
+            target = target * 0.5 + 0.5
         self.perceptual_function.eval()
         if len(source.shape) == 5:
             # Compute 2.5D approach
@@ -314,16 +317,7 @@ class NVMLightningModule(LightningModule):
         self.validation_step_outputs = []
         self.maeloss = nn.L1Loss(reduction="mean")
         
-        if self.perceptual2d:
-            self.pctloss = FlexiblePerceptualLoss(
-                spatial_dims=2, 
-                network_type="radimagenet_resnet50", 
-                # network_type="resnet50", 
-                # network_type="medicalnet_resnet50_23datasets", 
-                is_fake_3d=False, # fake_3d_ratio=20/256, # 0.0625, # 16/256
-                pretrained=True,
-            )
-        if self.perceptual:
+        if self.perceptual2d or self.perceptual:
             self.pctloss = FlexiblePerceptualLoss(
                 spatial_dims=3, 
                 network_type="radimagenet_resnet50", 
@@ -363,8 +357,8 @@ class NVMLightningModule(LightningModule):
             density = torch.clamp_(density, 0, 1)
             return self.fwd_renderer(density, cameras)
         else:
-            image3d = self.correct_window(image3d, a_min=-1024, a_max=3071, b_min=-512, b_max=3071)
-            return self.fwd_renderer(image3d, cameras)
+            image3d = self.correct_window(image3d * 0.5 + 0.5, a_min=-1024, a_max=3071, b_min=-512, b_max=3071) * 2.0 - 1.0
+            return self.fwd_renderer(image3d * 0.5 + 0.5, cameras) * 2.0 - 1.0
 
     def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None, is_training=False):
         _device = image2d.device
@@ -396,12 +390,12 @@ class NVMLightningModule(LightningModule):
         # inv = torch.cat([torch.inverse(R), -T], dim=-1)
         R = cameras.R
         inv = torch.cat([torch.inverse(R).reshape(B, 1, -1), torch.zeros((B, 1, 3), device=_device)], dim=-1)
-        results = self.unet2d_model(x=image2d * 2.0 - 1.0, context=inv, timesteps=timesteps,) * 0.5 + 0.5
+        results = self.unet2d_model(x=image2d, context=inv, timesteps=timesteps,) 
         return results
     
     def _common_step(self, batch, batch_idx, stage: Optional[str] = "evaluation"):
-        image3d = batch["image3d"]
-        image2d = batch["image2d"]
+        image3d = batch["image3d"] * 2.0 - 1.0
+        image2d = batch["image2d"] * 2.0 - 1.0
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
 
@@ -429,14 +423,14 @@ class NVMLightningModule(LightningModule):
         timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long()  # 3 views
 
         # figure_xr_latent_hidden = torch.randn_like(image2d)
-        volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5
+        volume_xr_latent = torch.randn_like(image3d) 
         figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
-        figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d * 2.0 - 1.0, noise=figure_xr_latent_hidden * 2.0 - 1.0, timesteps=timesteps) * 0.5 + 0.5
+        figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d, noise=figure_xr_latent_hidden, timesteps=timesteps) 
 
-        volume_ct_latent = torch.randn_like(image3d) * 0.5 + 0.5
+        volume_ct_latent = torch.randn_like(image3d) 
         figure_ct_latent_random = self.forward_screen(image3d=volume_ct_latent, cameras=view_random)
         figure_ct_latent_hidden = self.forward_screen(image3d=volume_ct_latent, cameras=view_hidden)
-        volume_ct_interp = self.ddpmsch.add_noise(original_samples=image3d * 2.0 - 1.0, noise=volume_ct_latent * 2.0 - 1.0, timesteps=timesteps) * 0.5 + 0.5
+        volume_ct_interp = self.ddpmsch.add_noise(original_samples=image3d, noise=volume_ct_latent, timesteps=timesteps) 
         figure_ct_interp_random = self.forward_screen(image3d=volume_ct_interp, cameras=view_random)
         figure_ct_interp_hidden = self.forward_screen(image3d=volume_ct_interp, cameras=view_hidden)
   
@@ -454,6 +448,76 @@ class NVMLightningModule(LightningModule):
             n_views=[1] * batchsz, 
             timesteps=timesteps.repeat(1),
         )
+        
+        if self.phase == "xronly":
+            if self.ddpmsch.prediction_type == "sample":
+                figure_xr_target_hidden = figure_xr_hidden
+                figure_ct_target_random = figure_ct_random
+                figure_ct_target_hidden = figure_ct_hidden
+            elif self.ddpmsch.prediction_type == "epsilon":
+                figure_xr_target_hidden = figure_xr_latent_hidden
+                figure_ct_target_random = figure_ct_latent_random
+                figure_ct_target_hidden = figure_ct_latent_hidden
+            elif self.ddpmsch.prediction_type == "v_prediction":
+                figure_xr_target_hidden = self.ddpmsch.get_velocity(figure_xr_hidden, figure_xr_latent_hidden, timesteps)
+                figure_ct_target_random = self.ddpmsch.get_velocity(figure_ct_random, figure_ct_latent_random, timesteps)
+                figure_ct_target_hidden = self.ddpmsch.get_velocity(figure_ct_hidden, figure_ct_latent_hidden, timesteps)
+
+            im2d_loss = (
+                self.maeloss(figure_ct_output_random, figure_ct_target_random)
+                + self.maeloss(figure_ct_output_hidden, figure_ct_target_hidden)
+            )
+
+            self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            loss = self.gamma * im2d_loss
+
+            if self.perceptual2d and stage=="train":
+                pc2d_loss = self.pctloss(figure_xr_output_hidden, figure_xr_target_hidden)
+                self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+                loss += self.delta * pc2d_loss  
+                
+            # Visualization step
+            if batch_idx == 0:
+                # Sampling step for X-ray
+                with torch.no_grad():
+                    # Construct the context pose to diffusion model
+                    # pose_random = torch.cat([view_random.R.reshape(batchsz, 1, -1), view_random.T.reshape(batchsz, 1, -1),], dim=-1,)
+                    # pose_hidden = torch.cat([view_hidden.R.reshape(batchsz, 1, -1), view_hidden.T.reshape(batchsz, 1, -1),], dim=-1,)
+                    R = view_hidden.R
+                    inv = torch.cat([torch.inverse(R).reshape(batchsz, 1, -1), torch.zeros((batchsz, 1, 3), device=_device)], dim=-1)
+            
+                    volume_xr_latent = torch.randn_like(image3d) 
+                    figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
+                    figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden, 
+                                                                diffusion_model=self.unet2d_model, 
+                                                                conditioning=inv.view(batchsz, 1, -1), 
+                                                                scheduler=self.ddimsch, 
+                                                                verbose=False,) 
+                    
+                zeros = torch.zeros_like(image2d)
+                viz2d = torch.cat([
+                    torch.cat([
+                        image2d, 
+                        zeros,
+                        zeros, 
+                        figure_xr_sample_hidden, 
+                        image3d[..., self.vol_shape // 2, :], 
+                        figure_ct_random, 
+                        figure_ct_hidden,
+                    ], dim=-2).transpose(2, 3),
+                    torch.cat([
+                        zeros,
+                        zeros,
+                        figure_ct_interp_random, 
+                        figure_ct_interp_hidden,
+                        zeros,
+                        figure_ct_output_random, 
+                        figure_ct_output_hidden, 
+                    ], dim=-2).transpose(2, 3),
+                ], dim=-2)
+                tensorboard = self.logger.experiment
+                grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0) * 0.5 + 0.5
+                tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
         
         if self.phase == "ctonly":
             # Reconstruct the Encoder-Decoder
@@ -524,13 +588,13 @@ class NVMLightningModule(LightningModule):
                     R = view_hidden.R
                     inv = torch.cat([torch.inverse(R).reshape(batchsz, 1, -1), torch.zeros((batchsz, 1, 3), device=_device)], dim=-1)
             
-                    volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5
+                    volume_xr_latent = torch.randn_like(image3d) 
                     figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
-                    figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden * 2.0 - 1.0, 
+                    figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden, 
                                                                 diffusion_model=self.unet2d_model, 
                                                                 conditioning=inv.view(batchsz, 1, -1), 
                                                                 scheduler=self.ddimsch, 
-                                                                verbose=False,) * 0.5 + 0.5
+                                                                verbose=False,) 
                     volume_xr_sample_hidden = self.forward_volume(image2d=figure_xr_sample_hidden, 
                                                                 cameras=view_hidden, 
                                                                 n_views=[1] * batchsz, timesteps=None)
@@ -560,10 +624,8 @@ class NVMLightningModule(LightningModule):
                     ], dim=-2).transpose(2, 3),
                 ], dim=-2)
                 tensorboard = self.logger.experiment
-                grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0)
+                grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0) * 0.5 + 0.5
                 tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
-                if self.tfunc:
-                    tensorboard.add_histogram(f"{stage}_emb_function", self.emb_function.weight, self.current_epoch * self.batch_size + batch_idx)
                       
             self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
@@ -581,75 +643,6 @@ class NVMLightningModule(LightningModule):
                 self.log(f"{stage}_pc3d_loss", pc3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
                 loss += self.delta * pc3d_loss  
                 
-        if self.phase == "xronly":
-            if self.ddpmsch.prediction_type == "sample":
-                figure_xr_target_hidden = image2d
-                figure_ct_target_random = figure_ct_random
-                figure_ct_target_hidden = figure_ct_hidden
-            elif self.ddpmsch.prediction_type == "epsilon":
-                figure_xr_target_hidden = figure_xr_latent_hidden
-                figure_ct_target_random = figure_ct_latent_random
-                figure_ct_target_hidden = figure_ct_latent_hidden
-            elif self.ddpmsch.prediction_type == "v_prediction":
-                figure_xr_target_hidden = self.ddpmsch.get_velocity(image2d, figure_xr_latent_hidden, timesteps)
-                figure_ct_target_random = self.ddpmsch.get_velocity(figure_ct_random, figure_ct_latent_random, timesteps)
-                figure_ct_target_hidden = self.ddpmsch.get_velocity(figure_ct_hidden, figure_ct_latent_hidden, timesteps)
-
-            im2d_loss = (
-                self.maeloss(figure_ct_output_random, figure_ct_target_random)
-                + self.maeloss(figure_ct_output_hidden, figure_ct_target_hidden)
-            )
-
-            self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            loss = self.gamma * im2d_loss
-
-            if self.perceptual2d and stage=="train":
-                pc2d_loss = self.pctloss(figure_xr_output_hidden, figure_xr_target_hidden)
-                self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-                loss += self.delta * pc2d_loss  
-                
-            # Visualization step
-            if batch_idx == 0:
-                # Sampling step for X-ray
-                with torch.no_grad():
-                    # Construct the context pose to diffusion model
-                    # pose_random = torch.cat([view_random.R.reshape(batchsz, 1, -1), view_random.T.reshape(batchsz, 1, -1),], dim=-1,)
-                    # pose_hidden = torch.cat([view_hidden.R.reshape(batchsz, 1, -1), view_hidden.T.reshape(batchsz, 1, -1),], dim=-1,)
-                    R = view_hidden.R
-                    inv = torch.cat([torch.inverse(R).reshape(batchsz, 1, -1), torch.zeros((batchsz, 1, 3), device=_device)], dim=-1)
-            
-                    volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5
-                    figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
-                    figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden * 2.0 - 1.0, 
-                                                                diffusion_model=self.unet2d_model, 
-                                                                conditioning=inv.view(batchsz, 1, -1), 
-                                                                scheduler=self.ddimsch, 
-                                                                verbose=False,) * 0.5 + 0.5
-                    
-                zeros = torch.zeros_like(image2d)
-                viz2d = torch.cat([
-                    torch.cat([
-                        image2d, 
-                        zeros,
-                        zeros, 
-                        figure_xr_sample_hidden, 
-                        image3d[..., self.vol_shape // 2, :], 
-                        figure_ct_random, 
-                        figure_ct_hidden,
-                    ], dim=-2).transpose(2, 3),
-                    torch.cat([
-                        zeros,
-                        zeros,
-                        figure_ct_interp_random, 
-                        figure_ct_interp_hidden,
-                        zeros,
-                        figure_ct_output_random, 
-                        figure_ct_output_hidden, 
-                    ], dim=-2).transpose(2, 3),
-                ], dim=-2)
-                tensorboard = self.logger.experiment
-                grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0)
-                tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
         return loss
 
     def training_step(self, batch, batch_idx):
