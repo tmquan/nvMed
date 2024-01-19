@@ -32,7 +32,7 @@ from monai.transforms import (
 from pytorch_lightning import LightningDataModule
 
 
-class UnpairedDataset(CacheDataset, Randomizable):
+class UnpairedDataset(Dataset, Randomizable):
     def __init__(
         self,
         keys: Sequence,
@@ -286,7 +286,7 @@ class UnpairedDataModule(LightningDataModule):
         self.train_loader = DataLoader(
             self.train_datasets,
             batch_size=self.batch_size,
-            num_workers=32,
+            num_workers=16,
             collate_fn=list_data_collate,
             shuffle=True,
         )
@@ -406,7 +406,7 @@ class UnpairedDataModule(LightningDataModule):
         self.val_loader = DataLoader(
             self.val_datasets,
             batch_size=self.batch_size,
-            num_workers=16,
+            num_workers=8,
             collate_fn=list_data_collate,
             shuffle=True,
         )
@@ -526,7 +526,7 @@ class UnpairedDataModule(LightningDataModule):
         self.test_loader = DataLoader(
             self.test_datasets,
             batch_size=self.batch_size,
-            num_workers=16,
+            num_workers=8,
             collate_fn=list_data_collate,
             shuffle=False,
         )
@@ -650,7 +650,7 @@ class ExampleDataModule(LightningDataModule):
         self.train_loader = DataLoader(
             self.train_datasets,
             batch_size=self.batch_size,
-            num_workers=48,
+            num_workers=32,
             collate_fn=list_data_collate,
             shuffle=True,
         )

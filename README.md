@@ -51,3 +51,10 @@ env CUDA_VISIBLE_DEVICES='4,5,6,7' CUDA_LAUNCH_BLOCKING=1  python main_nvmed_inv
 env CUDA_VISIBLE_DEVICES='4,5,6,7' CUDA_LAUNCH_BLOCKING=1  python main_nvmed_dif.py --accelerator='gpu' --devices=4 --batch_size=1 --lr=1e-4 --epochs=201 --logsdir=/home/quantm/logs/b0_nvmed_dif --datadir=/home/quantm/data --train_samples=4000 --val_samples=800 --n_pts_per_ray=256 --vol_shape=256 --img_shape=256 --fov_depth=256 --alpha=1 --theta=1 --gamma=1 --delta=0.002 --omega=0.01 --lamda=1 --sh=0 --pe=0 --prediction_type='sample' --amp --strategy=auto --backbone='efficientnet-b0' --phase=ctonly --ckpt=/home/quantm/logs/b0_nvmed_inv_ctonly/epoch=159-step=80000.ckpt
 
 ```
+
+
+```
+rsync -azP -e "ssh -p 2212" RadImageNet-ResNet50_notop.pth.pth  quantm@118.70.180.142:/home/quantm/.cache/torch/hub/medicalnet/
+
+rsync -azP -e "ssh -p 2212" resnet_50_23dataset.pth  quantm@118.70.180.142:/home/quantm/.cache/torch/hub/medicalnet/
+```
