@@ -153,7 +153,7 @@ class InverseXrayVolumeRenderer(nn.Module):
                 kernel_size=3, 
                 up_kernel_size=3, 
                 act=("LeakyReLU", {"inplace": True}), 
-                norm=Norm.INSTANCE,
+                norm=Norm.BATCH,
                 dropout=0.5
             ),
         )
@@ -186,14 +186,14 @@ class InverseXrayVolumeRenderer(nn.Module):
         #     return fov 
         vol = self.net3d3d(fov) 
 
-        if is_training:
-            # Randomly choose between mid and fov with a 50% probability each using torch.rand()
-            if torch.rand(1).item() < 0.5:
-                return fov
-            else:
-                return vol
-        return vol
-        # return vol + fov
+        # if is_training:
+        #     # Randomly choose between mid and fov with a 50% probability each using torch.rand()
+        #     if torch.rand(1).item() < 0.5:
+        #         return fov
+        #     else:
+        #         return vol
+        # return vol
+        return vol + fov
     
 class FlexiblePerceptualLoss(PerceptualLoss):
     def __init__(self,*args, **kwargs) -> None:
@@ -397,52 +397,51 @@ class NVMLightningModule(LightningModule):
         figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
         figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
         
-        if self.phase=="direct" or self.phase=="ctonly":
-            # Reconstruct the Encoder-Decoder
-            volume_dx_concat = self.forward_volume(
-                image2d=torch.cat([figure_ct_random, figure_ct_hidden]), 
-                cameras=join_cameras_as_batch([view_random, view_hidden]), 
-                n_views=[1, 1]*batchsz,
-                resample=self.resample,
-                timesteps=None, 
-                is_training=(stage=="train"),
-            )
-            volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
+        # if self.phase=="direct" or self.phase=="ctonly":
+        #     # Reconstruct the Encoder-Decoder
+        #     volume_dx_concat = self.forward_volume(
+        #         image2d=torch.cat([figure_ct_random, figure_ct_hidden]), 
+        #         cameras=join_cameras_as_batch([view_random, view_hidden]), 
+        #         n_views=[1, 1]*batchsz,
+        #         resample=self.resample,
+        #         timesteps=None, 
+        #         is_training=(stage=="train"),
+        #     )
+        #     volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
             
-            # Reconstruct the Encoder-Decoder
-            volume_xr_hidden_inverse = self.forward_volume(
-                image2d=torch.cat([figure_xr_hidden]), 
-                cameras=join_cameras_as_batch([view_hidden]), 
-                n_views=[1]*batchsz,
-                resample=self.resample,
-                timesteps=None, 
-                is_training=(stage=="train"),
-            )
+        #     # Reconstruct the Encoder-Decoder
+        #     volume_xr_hidden_inverse = self.forward_volume(
+        #         image2d=torch.cat([figure_xr_hidden]), 
+        #         cameras=join_cameras_as_batch([view_hidden]), 
+        #         n_views=[1]*batchsz,
+        #         resample=self.resample,
+        #         timesteps=None, 
+        #         is_training=(stage=="train"),
+        #     )
         
-        elif self.phase=="ctxray" or self.phase=="cycle":
-            # Reconstruct the Encoder-Decoder
-            volume_dx_concat = self.forward_volume(
-                image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
-                cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-                n_views=[1, 1, 1]*batchsz,
-                resample=self.resample,
-                timesteps=None, 
-                is_training=(stage=="train"),
-            )
-            volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
+        # elif self.phase=="ctxray" or self.phase=="cycle":
+        #     # Reconstruct the Encoder-Decoder
+        #     volume_dx_concat = self.forward_volume(
+        #         image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
+        #         cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+        #         n_views=[1, 1, 1]*batchsz,
+        #         resample=self.resample,
+        #         timesteps=None, 
+        #         is_training=(stage=="train"),
+        #     )
+        #     volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
         
-        # # Reconstruct the Encoder-Decoder
-        # volume_dx_concat = self.forward_volume(
-        #     image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
-        #     cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-        #     n_views=[1, 1, 1]*batchsz,
-        #     resample=self.resample,
-        #     timesteps=None, 
-        #     is_training=(stage=="train"),
-        # )
-        # volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
+        # Reconstruct the Encoder-Decoder
+        volume_dx_concat = self.forward_volume(
+            image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
+            cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+            n_views=[1, 1, 1]*batchsz,
+            resample=self.resample,
+            timesteps=None, 
+            is_training=(stage=="train"),
+        )
+        volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
         
-
         # with torch.no_grad():
         figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
         figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden)
