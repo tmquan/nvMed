@@ -13,7 +13,7 @@ pip install -U diffusers
 pip install -U lightning
 pip install -U tensorboard
 
-pip install -U monai
+pip install -U monai[nibabel]
 pip install -U einops
 pip install -U lmdb
 pip install -U mlflow
@@ -26,7 +26,7 @@ pip install -U gdown
 pip install -U itk
 
 pip install -U git+https://github.com/Project-MONAI/GenerativeModels.git 
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
 

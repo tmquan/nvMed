@@ -175,7 +175,7 @@ class InverseXrayVolumeRenderer(nn.Module):
         # Run forward pass
         fov = self.net2d3d(
             x=image2d, 
-            context=inv.reshape(batch, 1, -1),
+            context=mat.reshape(batch, 1, -1),
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
 
@@ -496,10 +496,23 @@ class NVMLightningModule(LightningModule):
             im2d_loss = im2d_loss_inv
             self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss = self.alpha * im3d_loss + self.gamma * im2d_loss
+        if self.phase == "ctxray":
+            im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
+                          + self.maeloss(volume_ct_random_inverse, image3d) 
+            im3d_loss = im3d_loss_inv
+            self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            im2d_loss_inv = self.maeloss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) \
+                          + self.maeloss(figure_ct_hidden_inverse_random, figure_ct_random) \
+                          + self.maeloss(figure_ct_random_inverse_hidden, figure_ct_hidden) \
+                          + self.maeloss(figure_ct_random_inverse_random, figure_ct_random) \
+                          + self.maeloss(figure_xr_hidden_inverse_hidden, image2d) # xr direct recon
+            im2d_loss = im2d_loss_inv
+            self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            loss = self.alpha * im3d_loss + self.gamma * im2d_loss
             
         if self.perceptual and stage=="train":
             pc2d_loss = self.p2dloss(figure_xr_hidden_inverse_random, figure_ct_random) \
-                      + self.p2dloss(figure_xr_hidden_inverse_hidden, image2d) 
+                      + self.p2dloss(figure_xr_hidden_inverse_hidden, figure_ct_hidden) 
             self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.delta * pc2d_loss    
             pc3d_loss = self.p3dloss(volume_xr_hidden_inverse, image3d) 
@@ -507,7 +520,7 @@ class NVMLightningModule(LightningModule):
             loss += self.delta * pc3d_loss    
         if self.ssim and stage=="train":
             si2d_loss = self.s2dloss(figure_xr_hidden_inverse_random, figure_ct_random) \
-                      + self.s2dloss(figure_xr_hidden_inverse_hidden, image2d) 
+                      + self.s2dloss(figure_xr_hidden_inverse_hidden, figure_ct_hidden) 
             self.log(f"{stage}_si2d_loss", si2d_loss, on_step=(stage == "train"), prog_bar=False, logger=True, sync_dist=True, batch_size=self.batch_size)
             loss += self.omega * si2d_loss    
             si3d_loss = self.s3dloss(volume_xr_hidden_inverse, image3d) 
