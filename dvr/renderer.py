@@ -54,7 +54,8 @@ class ForwardXRayVolumeRenderer(nn.Module):
         norm_type="minimized", 
         scaling_factor=0.1, 
         is_grayscale=True, 
-        return_bundle=False
+        return_bundle=False, 
+        stratified_sampling=False,
     ) -> torch.Tensor:
         
         features = image3d.repeat(1, 3, 1, 1, 1) if image3d.shape[1] == 1 else image3d
@@ -73,6 +74,8 @@ class ForwardXRayVolumeRenderer(nn.Module):
         
         # screen_RGBA, ray_bundles = self.renderer(cameras=cameras, volumes=volumes) #[...,:3]
         # rays_points = ray_bundle_to_ray_points(ray_bundles)
+        self.raymarcher._stratified_sampling = stratified_sampling
+        self.renderer = VolumeRenderer(raysampler=self.raysampler, raymarcher=self.raymarcher,)
         
         screen_RGBA, bundle = self.renderer(cameras=cameras, volumes=self.volumes)  # [...,:3]
 

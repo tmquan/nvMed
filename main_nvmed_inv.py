@@ -339,7 +339,7 @@ class NVMLightningModule(LightningModule):
         return T_new.clamp_(0, 1)
         # windowed = self.correct_window(image3d, a_min=-1024, a_max=3071, b_min=-600, b_max=3071)
        
-    def forward_screen(self, image3d, cameras):
+    def forward_screen(self, image3d, cameras, is_training=False):
         if self.tfunc:
             # Ensure the range
             density = image3d.clamp(0, 1)
@@ -353,10 +353,10 @@ class NVMLightningModule(LightningModule):
             density = flatten.view((B, -1, D, H, W))
             # Ensuring the output is in the range (0, 1)
             density = torch.clamp_(density, 0, 1)
-            return self.fwd_renderer(density, cameras)
+            return self.fwd_renderer(density, cameras, norm_type="standardized", stratified_sampling=is_training)
         else:
             image3d = self.correct_window(image3d, a_min=-1024, a_max=3071, b_min=-512, b_max=3071)
-            return self.fwd_renderer(image3d, cameras)
+            return self.fwd_renderer(image3d, cameras, norm_type="standardized", stratified_sampling=is_training)
 
 
     def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None, is_training=False):
@@ -394,8 +394,8 @@ class NVMLightningModule(LightningModule):
         # Construct the samples in 2D
         # with torch.no_grad():
         figure_xr_hidden = image2d
-        figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
-        figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
+        figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random, is_training=(stage=="train"))
+        figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden, is_training=(stage=="train"))
         
         # if self.phase=="direct" or self.phase=="ctonly":
         #     # Reconstruct the Encoder-Decoder
@@ -443,12 +443,12 @@ class NVMLightningModule(LightningModule):
         volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
         
         # with torch.no_grad():
-        figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
-        figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden)
-        figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random)
-        figure_ct_random_inverse_hidden = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_hidden)
-        figure_ct_hidden_inverse_random = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_random)
-        figure_ct_hidden_inverse_hidden = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_hidden)
+        figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random, is_training=(stage=="train"))
+        figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden, is_training=(stage=="train"))
+        figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random, is_training=(stage=="train"))
+        figure_ct_random_inverse_hidden = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_hidden, is_training=(stage=="train"))
+        figure_ct_hidden_inverse_random = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_random, is_training=(stage=="train"))
+        figure_ct_hidden_inverse_hidden = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_hidden, is_training=(stage=="train"))
 
         if self.sh > 0:
             volume_xr_hidden_inverse = volume_xr_hidden_inverse.sum(dim=1, keepdim=True)
@@ -551,12 +551,12 @@ class NVMLightningModule(LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            # [
-            #     # {"params": self.fwd_renderer.parameters()},
-            #     # {"params": self.emb_function.parameters()}, 
-            #     {"params": self.inv_renderer.parameters()},
-            # ],
-            self.inv_renderer.parameters(),
+            [
+                # {"params": self.fwd_renderer.parameters()},
+                # {"params": self.emb_function.parameters()}, 
+                {"params": self.inv_renderer.parameters()},
+            ],
+            # self.inv_renderer.parameters(),
             # self.parameters(),
             lr=self.lr,
             betas=(0.9, 0.999)
