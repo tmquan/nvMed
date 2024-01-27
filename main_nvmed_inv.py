@@ -179,22 +179,28 @@ class InverseXrayVolumeRenderer(nn.Module):
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
 
-        # if resample:
-        #     grd = F.affine_grid(inv, fov.size()).type(dtype)
-        #     return F.grid_sample(fov, grd)
-        # else:
-        #     return fov 
-        vol = self.net3d3d(fov) 
+        # vol = self.net3d3d(fov) 
+        # return vol + fov
 
-        # if is_training:
-        #     # Randomly choose between mid and fov with a 50% probability each using torch.rand()
-        #     if torch.rand(1).item() < 0.5:
-        #         return fov
-        #     else:
-        #         return vol
-        # return vol
-        return vol + fov
-    
+        if resample:
+            grd = F.affine_grid(inv, fov.size()).type(dtype)
+                 
+            if is_training:
+                # Randomly choose between mid and fov with a 50% probability each using torch.rand()
+                if torch.rand(1).item() < 0.5:
+                    mid = F.grid_sample(fov, grd)
+                    vol = mid + self.net3d3d(mid)
+                else:
+                    out = fov + self.net3d3d(fov)
+                    vol = F.grid_sample(out, grd)
+            else: 
+                mid = F.grid_sample(fov, grd)
+                vol = mid + self.net3d3d(mid)
+        else:
+            vol = fov + self.net3d3d(fov)
+        return vol
+        
+        
 class FlexiblePerceptualLoss(PerceptualLoss):
     def __init__(self,*args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
