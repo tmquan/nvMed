@@ -142,44 +142,63 @@ class InverseXrayVolumeRenderer(nn.Module):
             cross_attention_dim=12,  # flatR | flatT
         )
         
-        # self.net3d3d = nn.Sequential(
-        #     Unet(
-        #         spatial_dims=3, 
-        #         in_channels=1, 
-        #         out_channels=1, 
-        #         channels=backbones[backbone], 
-        #         strides=(2, 2, 2, 2, 2), 
-        #         num_res_units=2, 
-        #         kernel_size=3, 
-        #         up_kernel_size=3, 
-        #         act=("LeakyReLU", {"inplace": True}), 
-        #         norm=Norm.BATCH,
-        #         dropout=0.5
-        #     ),
-        # )
+        self.net3d3d = nn.Sequential(
+            Unet(
+                spatial_dims=3, 
+                in_channels=1, 
+                out_channels=1, 
+                channels=backbones[backbone], 
+                strides=(2, 2, 2, 2, 2), 
+                num_res_units=2, 
+                kernel_size=3, 
+                up_kernel_size=3, 
+                act=("LeakyReLU", {"inplace": True}), 
+                norm=Norm.BATCH,
+                dropout=0.5
+            ),
+        )
         
     def forward(self, image2d, cameras, resample=False, timesteps=None, is_training=False):
         _device = image2d.device
-        B = image2d.shape[0]
+        batch = image2d.shape[0]
         dtype = image2d.dtype
         if timesteps is None:
-            timesteps = torch.zeros((B), device=_device).long()
+            timesteps = torch.zeros((batch), device=_device).long()
         
         R = cameras.R
-        inv = torch.cat([torch.inverse(R).reshape(B, 1, -1), torch.zeros((B, 1, 3), device=_device)], dim=-1)
+        # T = cameras.T.unsqueeze_(-1)
+        T = torch.zeros_like(cameras.T.unsqueeze_(-1))
+        
+        mat = torch.cat([R, T], dim=-1)
+        inv = torch.cat([torch.inverse(R), -T], dim=-1)
         
         # Run forward pass
         fov = self.net2d3d(
             x=image2d, 
-            context=inv,
+            context=mat.reshape(batch, 1, -1),
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
 
+        # vol = self.net3d3d(fov) 
+        # return vol + fov
+
         if resample:
             grd = F.affine_grid(inv, fov.size()).type(dtype)
-            return F.grid_sample(fov, grd)
+                 
+            if is_training:
+                # Randomly choose between mid and fov with a 50% probability each using torch.rand()
+                if torch.rand(1).item() < 0.5:
+                    mid = F.grid_sample(fov, grd)
+                    vol = mid + self.net3d3d(mid)
+                else:
+                    out = fov + self.net3d3d(fov)
+                    vol = F.grid_sample(out, grd)
+            else: 
+                mid = F.grid_sample(fov, grd)
+                vol = mid + self.net3d3d(mid)
         else:
-            return fov 
+            vol = fov + self.net3d3d(fov)
+        return vol
         
 class FlexiblePerceptualLoss(PerceptualLoss):
     def __init__(self,*args, **kwargs) -> None:
@@ -317,13 +336,31 @@ class NVMLightningModule(LightningModule):
         self.validation_step_outputs = []
         self.maeloss = nn.L1Loss(reduction="mean")
         
-        if self.perceptual2d or self.perceptual:
-            self.pctloss = FlexiblePerceptualLoss(
-                spatial_dims=3, 
+        if self.perceptual:
+            # self.pctloss = FlexiblePerceptualLoss(
+            #     spatial_dims=3, 
+            #     network_type="radimagenet_resnet50", 
+            #     # network_type="resnet50", 
+            #     # network_type="medicalnet_resnet50_23datasets", 
+            #     is_fake_3d=True, fake_3d_ratio=20/256, # 0.0625, # 16/256
+            #     pretrained=True,
+            # )
+            self.p2dloss = PerceptualLoss(
+                spatial_dims=2, 
                 network_type="radimagenet_resnet50", 
                 # network_type="resnet50", 
                 # network_type="medicalnet_resnet50_23datasets", 
-                is_fake_3d=True, fake_3d_ratio=20/256, # 0.0625, # 16/256
+                is_fake_3d=False, 
+                # fake_3d_ratio=32/256, # 0.0625, # 16/256
+                pretrained=True,
+            )
+            self.p3dloss = PerceptualLoss(
+                spatial_dims=3, 
+                # network_type="radimagenet_resnet50", 
+                # network_type="resnet50", 
+                network_type="medicalnet_resnet50_23datasets", 
+                is_fake_3d=False, 
+                # fake_3d_ratio=32/256, # 0.0625, # 16/256
                 pretrained=True,
             )
         if self.ssim:
@@ -341,7 +378,9 @@ class NVMLightningModule(LightningModule):
         return T_new.clamp_(0, 1)
         # windowed = self.correct_window(image3d, a_min=-1024, a_max=3071, b_min=-600, b_max=3071)
        
-    def forward_screen(self, image3d, cameras):
+    def forward_screen(self, image3d, cameras, is_training=False):
+        if cameras.T.shape[-1] == 1:
+            cameras.T = cameras.T.squeeze(-1)
         if self.tfunc:
             # Ensure the range
             density = image3d.clamp(0, 1)
@@ -355,10 +394,10 @@ class NVMLightningModule(LightningModule):
             density = flatten.view((B, -1, D, H, W))
             # Ensuring the output is in the range (0, 1)
             density = torch.clamp_(density, 0, 1)
-            return self.fwd_renderer(density, cameras)
+            return self.fwd_renderer(density, cameras, norm_type="standardized", stratified_sampling=is_training)
         else:
-            image3d = self.correct_window(image3d * 0.5 + 0.5, a_min=-1024, a_max=3071, b_min=-512, b_max=3071) * 2.0 - 1.0
-            return self.fwd_renderer(image3d * 0.5 + 0.5, cameras) * 2.0 - 1.0
+            image3d = self.correct_window(image3d, a_min=-1024, a_max=3071, b_min=-512, b_max=3071)
+            return self.fwd_renderer(image3d, cameras, norm_type="standardized", stratified_sampling=is_training)
 
     def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None, is_training=False):
         _device = image2d.device
@@ -390,12 +429,12 @@ class NVMLightningModule(LightningModule):
         # inv = torch.cat([torch.inverse(R), -T], dim=-1)
         R = cameras.R
         inv = torch.cat([torch.inverse(R).reshape(B, 1, -1), torch.zeros((B, 1, 3), device=_device)], dim=-1)
-        results = self.unet2d_model(x=image2d, context=inv, timesteps=timesteps,) 
+        results = self.unet2d_model(x=image2d * 2.0 - 1.0, context=inv, timesteps=timesteps,) * 0.5 + 0.5
         return results
     
     def _common_step(self, batch, batch_idx, stage: Optional[str] = "evaluation"):
-        image3d = batch["image3d"] * 2.0 - 1.0
-        image2d = batch["image2d"] * 2.0 - 1.0
+        image3d = batch["image3d"]
+        image2d = batch["image2d"]
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
 
@@ -416,18 +455,35 @@ class NVMLightningModule(LightningModule):
         figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
         figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
         
-        view_concat = join_cameras_as_batch([view_random, view_hidden])
-       
+        ### @ Inversion step: 2 kinds of blending
+        # # Reconstruct the Encoder-Decoder
+        # volume_dx_concat = self.forward_volume(
+        #     image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
+        #     cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+        #     n_views=[1, 1, 1]*batchsz,
+        #     resample=self.resample,
+        #     timesteps=None, 
+        #     is_training=(stage=="train"),
+        # )
+        # volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
+        
+        # # with torch.no_grad():
+        # figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random, is_training=(stage=="train"))
+        # figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden, is_training=(stage=="train"))
+        # figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random, is_training=(stage=="train"))
+        # figure_ct_random_inverse_hidden = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_hidden, is_training=(stage=="train"))
+        # figure_ct_hidden_inverse_random = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_random, is_training=(stage=="train"))
+        # figure_ct_hidden_inverse_hidden = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_hidden, is_training=(stage=="train"))
 
-        # @ Diffusion step: 2 kinds of blending
+        ### @ Diffusion step: 2 kinds of blending
         timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long()  # 3 views
 
         # figure_xr_latent_hidden = torch.randn_like(image2d)
-        volume_xr_latent = torch.randn_like(image3d) 
+        volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5 
         figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
         figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d, noise=figure_xr_latent_hidden, timesteps=timesteps) 
 
-        volume_ct_latent = torch.randn_like(image3d) 
+        volume_ct_latent = torch.randn_like(image3d) * 0.5 + 0.5 
         figure_ct_latent_random = self.forward_screen(image3d=volume_ct_latent, cameras=view_random)
         figure_ct_latent_hidden = self.forward_screen(image3d=volume_ct_latent, cameras=view_hidden)
         volume_ct_interp = self.ddpmsch.add_noise(original_samples=image3d, noise=volume_ct_latent, timesteps=timesteps) 
@@ -435,20 +491,26 @@ class NVMLightningModule(LightningModule):
         figure_ct_interp_hidden = self.forward_screen(image3d=volume_ct_interp, cameras=view_hidden)
   
         # Run the backward diffusion (denoising + reproject)
+        # figure_dx_output = self.forward_timing(
+        #     image2d=torch.cat([figure_ct_interp_random, figure_ct_interp_hidden]), 
+        #     cameras=view_concat,
+        #     n_views=[1, 1] * batchsz, 
+        #     timesteps=timesteps.repeat(2),
+        # )
+        # figure_ct_output_random, figure_ct_output_hidden = torch.split(figure_dx_output, batchsz)
+        # figure_xr_output_hidden = self.forward_timing(
+        #     image2d=figure_xr_interp_hidden, 
+        #     cameras=view_hidden, 
+        #     n_views=[1] * batchsz, 
+        #     timesteps=timesteps.repeat(1),
+        # )
         figure_dx_output = self.forward_timing(
-            image2d=torch.cat([figure_ct_interp_random, figure_ct_interp_hidden]), 
-            cameras=view_concat,
-            n_views=[1, 1] * batchsz, 
-            timesteps=timesteps.repeat(2),
+            image2d=torch.cat([figure_xr_interp_hidden, figure_ct_interp_random, figure_ct_interp_hidden]), 
+            cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+            n_views=[1, 1, 1] * batchsz, 
+            timesteps=timesteps.repeat(3),
         )
-        figure_ct_output_random, figure_ct_output_hidden = torch.split(figure_dx_output, batchsz)
-        figure_xr_output_hidden = self.forward_timing(
-            image2d=figure_xr_interp_hidden, 
-            cameras=view_hidden, 
-            n_views=[1] * batchsz, 
-            timesteps=timesteps.repeat(1),
-        )
-        
+        figure_xr_output_hidden, figure_ct_output_random, figure_ct_output_hidden = torch.split(figure_dx_output, batchsz)
         if self.phase == "xronly":
             if self.ddpmsch.prediction_type == "sample":
                 figure_xr_target_hidden = figure_xr_hidden
@@ -519,26 +581,16 @@ class NVMLightningModule(LightningModule):
                 grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0) * 0.5 + 0.5
                 tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
         
-        if self.phase == "ctonly":
-            # Reconstruct the Encoder-Decoder
+        if self.phase == "ctxray":
             volume_dx_output = self.forward_volume(
-                image2d=torch.cat([figure_ct_output_random, figure_ct_output_hidden]), 
-                cameras=view_concat,
-                n_views=[1, 1]*batchsz,
+                image2d=torch.cat([figure_xr_output_hidden, figure_ct_output_random, figure_ct_output_hidden]), 
+                cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+                n_views=[1, 1, 1]*batchsz,
                 resample=self.resample,
                 timesteps=None, 
                 is_training=(stage=="train"),
             )
-            volume_ct_random_output, volume_ct_hidden_output = torch.split(volume_dx_output, batchsz)
-            
-            volume_xr_hidden_output = self.forward_volume(
-                image2d=figure_xr_output_hidden, 
-                cameras=view_hidden, 
-                n_views=[1] * batchsz, 
-                resample=self.resample,
-                timesteps=None, 
-                is_training=(stage=="train"),
-            )
+            volume_xr_hidden_output, volume_ct_random_output, volume_ct_hidden_output = torch.split(volume_dx_output, batchsz)
 
             figure_xr_hidden_output_random = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_random)
             figure_xr_hidden_output_hidden = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_hidden)
@@ -563,8 +615,8 @@ class NVMLightningModule(LightningModule):
                 figure_ct_target_hidden = self.ddpmsch.get_velocity(figure_ct_hidden, figure_ct_latent_hidden, timesteps)
                 volume_ct_target = self.ddpmsch.get_velocity(image3d, volume_ct_latent, timesteps)
 
-            im2d_loss = (
-                self.pctloss(figure_xr_output_hidden, figure_xr_target_hidden)
+            im2d_loss_dif = (
+                self.maeloss(figure_xr_output_hidden, figure_xr_target_hidden)
                 + self.maeloss(figure_ct_output_random, figure_ct_target_random)
                 + self.maeloss(figure_ct_output_hidden, figure_ct_target_hidden)
                 + self.maeloss(figure_ct_hidden_output_random, figure_ct_target_random)
@@ -573,11 +625,39 @@ class NVMLightningModule(LightningModule):
                 + self.maeloss(figure_ct_random_output_hidden, figure_ct_target_hidden)
             )
 
-            im3d_loss = (
+            im3d_loss_dif = (
                 self.maeloss(volume_ct_random_output, volume_ct_target)
                 + self.maeloss(volume_ct_hidden_output, volume_ct_target)
             )
+            
+            # im3d_loss_inv = self.maeloss(volume_ct_hidden_inverse, image3d) \
+            #               + self.maeloss(volume_ct_random_inverse, image3d) 
 
+            # im2d_loss_inv = self.maeloss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) \
+            #               + self.maeloss(figure_ct_hidden_inverse_random, figure_ct_random) \
+            #               + self.maeloss(figure_ct_random_inverse_hidden, figure_ct_hidden) \
+            #               + self.maeloss(figure_ct_random_inverse_random, figure_ct_random) \
+            #               + self.maeloss(figure_xr_hidden_inverse_hidden, image2d) # xr direct recon
+
+            # im3d_loss = im3d_loss_inv + im3d_loss_dif
+            # im2d_loss = im2d_loss_inv + im2d_loss_dif
+            im3d_loss = im3d_loss_dif
+            im2d_loss = im2d_loss_dif
+            self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            loss = self.alpha * im3d_loss + self.gamma * im2d_loss
+            
+            if self.perceptual and stage=="train":
+                pc2d_loss = self.p2dloss(figure_xr_hidden_output_random, figure_ct_random) \
+                          + self.p2dloss(figure_xr_hidden_output_hidden, image2d) \
+                          + self.p2dloss(figure_xr_output_hidden, image2d) 
+                self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+                loss += self.delta * pc2d_loss  
+                
+                pc3d_loss = self.p3dloss(volume_xr_hidden_output, image3d) 
+                self.log(f"{stage}_pc3d_loss", pc3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+                loss += self.delta * pc3d_loss  
+            
             # Visualization step
             if batch_idx == 0:
                 # Sampling step for X-ray
@@ -587,62 +667,106 @@ class NVMLightningModule(LightningModule):
                     # pose_hidden = torch.cat([view_hidden.R.reshape(batchsz, 1, -1), view_hidden.T.reshape(batchsz, 1, -1),], dim=-1,)
                     R = view_hidden.R
                     inv = torch.cat([torch.inverse(R).reshape(batchsz, 1, -1), torch.zeros((batchsz, 1, 3), device=_device)], dim=-1)
-            
-                    volume_xr_latent = torch.randn_like(image3d) 
-                    figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
-                    figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden, 
+                    volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5
+                    figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden, is_training=(stage=="train"))
+                    figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden * 2.0 - 1.0, 
                                                                 diffusion_model=self.unet2d_model, 
                                                                 conditioning=inv.view(batchsz, 1, -1), 
                                                                 scheduler=self.ddimsch, 
-                                                                verbose=False,) 
+                                                                verbose=False,) * 0.5 + 0.5
                     volume_xr_sample_hidden = self.forward_volume(image2d=figure_xr_sample_hidden, 
                                                                 cameras=view_hidden, 
                                                                 n_views=[1] * batchsz, timesteps=None)
                     # print(volume_xr_sample_hidden.shape)
-                    figure_xr_sample_hidden_random = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_random)
-                    figure_xr_sample_hidden_hidden = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_hidden)
+                    # print(view_random.R.shape, view_random.T.shape)
+                    # print(view_hidden.R.shape, view_hidden.T.shape)
+                    figure_xr_sample_hidden_random = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_random, is_training=(stage=="train"))
+                    figure_xr_sample_hidden_hidden = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_hidden, is_training=(stage=="train"))
 
+                    # Reconstruct the Encoder-Decoder
+                    volume_dx_concat = self.forward_volume(
+                        image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
+                        cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+                        n_views=[1, 1, 1]*batchsz,
+                        resample=self.resample,
+                        timesteps=None, 
+                        is_training=(stage=="train"),
+                    )
+                    volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_concat, batchsz)
+                    
+                    # with torch.no_grad():
+                    figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random, is_training=(stage=="train"))
+                    figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden, is_training=(stage=="train"))
+                    figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random, is_training=(stage=="train"))
+                    figure_ct_random_inverse_hidden = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_hidden, is_training=(stage=="train"))
+                    figure_ct_hidden_inverse_random = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_random, is_training=(stage=="train"))
+                    figure_ct_hidden_inverse_hidden = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_hidden, is_training=(stage=="train"))
+                            
                 zeros = torch.zeros_like(image2d)
                 viz2d = torch.cat([
                     torch.cat([
                         image2d, 
-                        volume_xr_hidden_output[..., self.vol_shape // 2, :], 
-                        figure_xr_hidden_output_random, 
-                        figure_xr_hidden_output_hidden, 
+                        volume_xr_hidden_inverse[..., self.vol_shape // 2, :], 
+                        figure_xr_hidden_inverse_random, 
+                        figure_xr_hidden_inverse_hidden, 
                         image3d[..., self.vol_shape // 2, :], 
                         figure_ct_random, 
                         figure_ct_hidden,
                     ], dim=-2).transpose(2, 3),
                     torch.cat([
-                        zeros,
+                        zeros, 
+                        volume_ct_random_inverse[..., self.vol_shape // 2, :],
+                        figure_ct_random_inverse_random,
+                        figure_ct_random_inverse_hidden,
+                        volume_ct_hidden_inverse[..., self.vol_shape // 2, :],
+                        figure_ct_hidden_inverse_random,
+                        figure_ct_hidden_inverse_hidden,
+                    ], dim=-2).transpose(2, 3),
+                    torch.cat([
+                        zeros, 
+                        volume_xr_hidden_output[..., self.vol_shape // 2, :], 
+                        figure_xr_hidden_output_random, 
+                        figure_xr_hidden_output_hidden, 
                         volume_xr_sample_hidden[..., self.vol_shape // 2, :], 
                         figure_xr_sample_hidden_random, 
-                        figure_xr_sample_hidden_hidden, 
+                        figure_xr_sample_hidden_hidden,
+                    ], dim=-2).transpose(2, 3),
+                    torch.cat([
+                        zeros,
+                        volume_ct_random_output[..., self.vol_shape // 2, :],
+                        figure_ct_random_output_random,
+                        figure_ct_random_output_hidden,
                         volume_ct_hidden_output[..., self.vol_shape // 2, :],
                         figure_ct_hidden_output_random,
                         figure_ct_hidden_output_hidden,
                     ], dim=-2).transpose(2, 3),
                 ], dim=-2)
+
+                # viz2d = torch.cat([
+                #     torch.cat([
+                #         image2d, 
+                #         volume_xr_hidden_output[..., self.vol_shape // 2, :], 
+                #         figure_xr_hidden_output_random, 
+                #         figure_xr_hidden_output_hidden, 
+                #         image3d[..., self.vol_shape // 2, :], 
+                #         figure_ct_random, 
+                #         figure_ct_hidden,
+                #     ], dim=-2).transpose(2, 3),
+                #     torch.cat([
+                #         zeros,
+                #         volume_ct_random_output[..., self.vol_shape // 2, :],
+                #         figure_ct_random_output_random,
+                #         figure_ct_random_output_hidden,
+                #         volume_ct_hidden_output[..., self.vol_shape // 2, :],
+                #         figure_ct_hidden_output_random,
+                #         figure_ct_hidden_output_hidden,
+                #     ], dim=-2).transpose(2, 3),
+                # ], dim=-2)
+
                 tensorboard = self.logger.experiment
-                grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0) * 0.5 + 0.5
+                grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0)
                 tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
                       
-            self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            loss = self.alpha * im3d_loss + self.gamma * im2d_loss
-            
-            if self.perceptual2d and stage=="train":
-                pc2d_loss = self.pctloss(figure_xr_hidden_output_random, figure_ct_random) \
-                          + self.pctloss(figure_xr_hidden_output_hidden, image2d) \
-                          + self.pctloss(figure_xr_output_hidden, image2d) 
-                self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-                loss += self.delta * pc2d_loss  
-                
-            if self.perceptual3d and stage=="train":
-                pc3d_loss = self.pctloss(volume_xr_hidden_output, image3d) 
-                self.log(f"{stage}_pc3d_loss", pc3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-                loss += self.delta * pc3d_loss  
-                
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -667,13 +791,13 @@ class NVMLightningModule(LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            # [
-            #     # {"params": self.fwd_renderer.parameters()},
-            #     # {"params": self.emb_function.parameters()}, 
-            #     {"params": self.unet2d_model.parameters()},
-            #     {"params": self.inv_renderer.parameters()},
-            # ],
-            self.unet2d_model.parameters(),
+            [
+                # {"params": self.fwd_renderer.parameters()},
+                # {"params": self.emb_function.parameters()}, 
+                {"params": self.unet2d_model.parameters()},
+                {"params": self.inv_renderer.parameters()},
+            ],
+            # self.unet2d_model.parameters(),
             # self.inv_renderer.parameters(),
             # self.parameters(),
             lr=self.lr,
