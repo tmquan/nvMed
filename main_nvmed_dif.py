@@ -158,7 +158,7 @@ class InverseXrayVolumeRenderer(nn.Module):
             ),
         )
         
-    def forward(self, image2d, cameras, resample=False, timesteps=None, is_training=False):
+    def forward(self, image2d, cameras, resample=True, timesteps=None, is_training=False):
         _device = image2d.device
         batch = image2d.shape[0]
         dtype = image2d.dtype
@@ -399,7 +399,7 @@ class NVMLightningModule(LightningModule):
             image3d = self.correct_window(image3d, a_min=-1024, a_max=3071, b_min=-512, b_max=3071)
             return self.fwd_renderer(image3d, cameras, norm_type="standardized", stratified_sampling=is_training)
 
-    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None, is_training=False):
+    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=True, timesteps=None, is_training=False):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
@@ -496,9 +496,9 @@ class NVMLightningModule(LightningModule):
             volume_dx_output = self.forward_volume(
                 image2d=torch.cat([figure_xr_output_hidden, figure_ct_output_random, figure_ct_output_hidden]), 
                 cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-                n_views=[1, 1, 1]*batchsz,
+                n_views=[1, 1, 1] * batchsz,
                 resample=self.resample,
-                timesteps=None, 
+                timesteps=timesteps.repeat(3), 
                 is_training=(stage=="train"),
             )
             volume_xr_hidden_output, volume_ct_random_output, volume_ct_hidden_output = torch.split(volume_dx_output, batchsz)
@@ -532,12 +532,14 @@ class NVMLightningModule(LightningModule):
             im2d_loss_dif = self.maeloss(figure_xr_output_hidden, figure_xr_target_hidden) \
                           + self.maeloss(figure_ct_output_random, figure_ct_target_random) \
                           + self.maeloss(figure_ct_output_hidden, figure_ct_target_hidden) \
-                        #   + self.maeloss(figure_xr_hidden_output_hidden, figure_xr_target_hidden) \
                         #   + self.maeloss(figure_ct_random_output_random, figure_ct_target_random) \
                         #   + self.maeloss(figure_ct_random_output_hidden, figure_ct_target_hidden) \
                         #   + self.maeloss(figure_ct_hidden_output_random, figure_ct_target_random) \
-                        #   + self.maeloss(figure_ct_hidden_output_hidden, figure_ct_target_hidden) 
-            
+                        #   + self.maeloss(figure_ct_hidden_output_hidden, figure_ct_target_hidden) \
+                        #   + self.maeloss(figure_ct_output_random, figure_ct_target_random) \
+                        #   + self.maeloss(figure_ct_output_hidden, figure_ct_target_hidden) \
+                        #   + self.maeloss(figure_xr_hidden_output_hidden, figure_xr_target_hidden) \
+                        
             # Reconstruct the Encoder-Decoder
             volume_dx_concat = self.forward_volume(
                 image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
@@ -564,7 +566,7 @@ class NVMLightningModule(LightningModule):
                           + self.maeloss(figure_ct_hidden_inverse_random, figure_ct_random) \
                           + self.maeloss(figure_ct_random_inverse_hidden, figure_ct_hidden) \
                           + self.maeloss(figure_ct_random_inverse_random, figure_ct_random) \
-                          + self.maeloss(figure_xr_hidden_inverse_hidden, image2d) # xr direct recon
+                        #   + self.maeloss(figure_xr_hidden_inverse_hidden, image2d) # xr direct recon
 
             im3d_loss = im3d_loss_inv + im3d_loss_dif
             im2d_loss = im2d_loss_inv + im2d_loss_dif
@@ -578,8 +580,10 @@ class NVMLightningModule(LightningModule):
             if self.perceptual and stage=="train":
                 pc2d_loss = self.p2dloss(figure_xr_hidden_output_random, figure_ct_random) \
                           + self.p2dloss(figure_xr_hidden_output_hidden, figure_ct_hidden) \
+                          + self.p2dloss(figure_xr_hidden_output_hidden, image2d) \
                           + self.p2dloss(figure_xr_hidden_inverse_random, figure_ct_random) \
-                          + self.p2dloss(figure_xr_hidden_inverse_hidden, figure_ct_hidden) 
+                          + self.p2dloss(figure_xr_hidden_inverse_hidden, figure_ct_hidden) \
+                          + self.p2dloss(figure_xr_hidden_inverse_hidden, image2d) \
                 
                 self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
                 loss += self.delta * pc2d_loss  
@@ -607,8 +611,11 @@ class NVMLightningModule(LightningModule):
                                                                 scheduler=self.ddimsch, 
                                                                 verbose=False,) * 0.5 + 0.5
                     volume_xr_sample_hidden = self.forward_volume(image2d=figure_xr_sample_hidden, 
-                                                                cameras=view_hidden, 
-                                                                n_views=[1] * batchsz, timesteps=None)
+                                                                  cameras=view_hidden, 
+                                                                  n_views=[1] * batchsz, 
+                                                                  resample=self.resample,
+                                                                  timesteps=None
+                                                                  )
                     # print(volume_xr_sample_hidden.shape)
                     # print(view_random.R.shape, view_random.T.shape)
                     # print(view_hidden.R.shape, view_hidden.T.shape)
