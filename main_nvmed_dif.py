@@ -464,7 +464,7 @@ class NVMLightningModule(LightningModule):
         # volume_dx_concat = self.forward_volume(
         #     image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
         #     cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-        #     n_views=[1, 1, 1]*batchsz,
+        #     n_views=[1, 1, 1] * batchsz,
         #     resample=self.resample,
         #     timesteps=None, 
         #     is_training=(stage=="train"),
@@ -516,10 +516,10 @@ class NVMLightningModule(LightningModule):
 
             figure_xr_hidden_output_random = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_random)
             figure_xr_hidden_output_hidden = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_hidden)
-            # figure_ct_random_output_random = self.forward_screen(image3d=volume_ct_random_output, cameras=view_random)
-            # figure_ct_random_output_hidden = self.forward_screen(image3d=volume_ct_random_output, cameras=view_hidden)
-            # figure_ct_hidden_output_random = self.forward_screen(image3d=volume_ct_hidden_output, cameras=view_random)
-            # figure_ct_hidden_output_hidden = self.forward_screen(image3d=volume_ct_hidden_output, cameras=view_hidden)
+            figure_ct_random_output_random = self.forward_screen(image3d=volume_ct_random_output, cameras=view_random)
+            figure_ct_random_output_hidden = self.forward_screen(image3d=volume_ct_random_output, cameras=view_hidden)
+            figure_ct_hidden_output_random = self.forward_screen(image3d=volume_ct_hidden_output, cameras=view_random)
+            figure_ct_hidden_output_hidden = self.forward_screen(image3d=volume_ct_hidden_output, cameras=view_hidden)
 
             if self.ddpmsch.prediction_type == "sample":
                 figure_xr_target_hidden = image2d
@@ -543,10 +543,10 @@ class NVMLightningModule(LightningModule):
             im2d_loss_dif = self.maeloss(figure_xr_output_hidden, figure_xr_target_hidden) \
                           + self.maeloss(figure_ct_output_random, figure_ct_target_random) \
                           + self.maeloss(figure_ct_output_hidden, figure_ct_target_hidden) \
-                        #   + self.maeloss(figure_ct_random_output_random, figure_ct_target_random) \
-                        #   + self.maeloss(figure_ct_random_output_hidden, figure_ct_target_hidden) \
-                        #   + self.maeloss(figure_ct_hidden_output_random, figure_ct_target_random) \
-                        #   + self.maeloss(figure_ct_hidden_output_hidden, figure_ct_target_hidden) \
+                          + self.maeloss(figure_ct_random_output_random, figure_ct_target_random) \
+                          + self.maeloss(figure_ct_random_output_hidden, figure_ct_target_hidden) \
+                          + self.maeloss(figure_ct_hidden_output_random, figure_ct_target_random) \
+                          + self.maeloss(figure_ct_hidden_output_hidden, figure_ct_target_hidden) \
                         #   + self.maeloss(figure_ct_output_random, figure_ct_target_random) \
                         #   + self.maeloss(figure_ct_output_hidden, figure_ct_target_hidden) \
                         #   + self.maeloss(figure_xr_hidden_output_hidden, figure_xr_target_hidden) \
@@ -555,7 +555,7 @@ class NVMLightningModule(LightningModule):
             volume_dx_concat = self.forward_volume(
                 image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
                 cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-                n_views=[1, 1, 1]*batchsz,
+                n_views=[1, 1, 1] * batchsz,
                 resample=self.resample,
                 timesteps=None, 
                 is_training=(stage=="train"),
@@ -637,7 +637,7 @@ class NVMLightningModule(LightningModule):
                     # volume_dx_concat = self.forward_volume(
                     #     image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
                     #     cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-                    #     n_views=[1, 1, 1]*batchsz,
+                    #     n_views=[1, 1, 1] * batchsz,
                     #     resample=self.resample,
                     #     timesteps=None, 
                     #     is_training=(stage=="train"),
