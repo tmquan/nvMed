@@ -571,7 +571,7 @@ class NVMLightningModule(LightningModule):
             im3d_loss_dif = self.maeloss(volume_ct_hidden_output, volume_ct_target) \
                           + self.maeloss(volume_ct_random_output, volume_ct_target) 
             
-            im2d_loss_dif = self.maeloss(figure_xr_output_hidden, figure_xr_target_hidden) \
+            im2d_loss_dif = self.maeloss(figure_xr_hidden_output_hidden, figure_xr_target_hidden) \
                           + self.maeloss(figure_ct_random_output_random, figure_ct_target_random) \
                           + self.maeloss(figure_ct_random_output_hidden, figure_ct_target_hidden) \
                           + self.maeloss(figure_ct_hidden_output_random, figure_ct_target_random) \
@@ -580,6 +580,7 @@ class NVMLightningModule(LightningModule):
                         #   + self.maeloss(figure_ct_output_hidden, figure_ct_target_hidden) \
                         #   + self.maeloss(figure_ct_output_random, figure_ct_target_random) \
                         #   + self.maeloss(figure_ct_output_hidden, figure_ct_target_hidden) \
+                        #   + self.maeloss(figure_xr_output_hidden, figure_xr_target_hidden) \
                         #   + self.maeloss(figure_xr_hidden_output_hidden, figure_xr_target_hidden) \
                
             im3d_loss = im3d_loss_inv + im3d_loss_dif
