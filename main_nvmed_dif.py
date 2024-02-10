@@ -690,8 +690,8 @@ class NVMLightningModule(LightningModule):
                         figure_ct_random_output_random,
                         figure_ct_random_output_hidden,
                         volume_ct_hidden_output[..., self.vol_shape // 2, :],
-                        figure_ct_hidden_output_hidden,
                         figure_ct_hidden_output_random,
+                        figure_ct_hidden_output_hidden,
                     ], dim=-2).transpose(2, 3),
                     torch.cat([
                         figure_xr_latent_hidden, 
