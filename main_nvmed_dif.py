@@ -266,7 +266,7 @@ class NVMLightningModule(LightningModule):
             pe=self.pe, 
             backbone=self.backbone,
         )
-        init_weights(self.inv_renderer, init_type="normal")
+        # init_weights(self.inv_renderer, init_type="normal")
         
         # @ Diffusion 
         self.unet2d_model = DiffusionModelUNet(
@@ -284,7 +284,7 @@ class NVMLightningModule(LightningModule):
             with_conditioning=True, 
             cross_attention_dim=12, # Condition with straight/hidden view  # flatR | flatT
         )
-        init_weights(self.unet2d_model, init_type="normal")
+        # init_weights(self.unet2d_model, init_type="normal")
 
         self.ddpmsch = DDPMScheduler(
             num_train_timesteps=self.timesteps, 
@@ -535,13 +535,13 @@ class NVMLightningModule(LightningModule):
                         #   + self.p2dloss(figure_xr_hidden_inverse_hidden, image2d) \
                 
                 self.log(f"{stage}_pc2d_loss", pc2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-                loss += self.delta * pc2d_loss  
+                loss += self.delta * pc2d_loss.nan_to_num_(0.0)  
                 
                 pc3d_loss = self.p3dloss(volume_xr_hidden_output, image3d) \
                           + self.p3dloss(volume_xr_hidden_inverse, image3d) 
                 
                 self.log(f"{stage}_pc3d_loss", pc3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-                loss += self.delta * pc3d_loss  
+                loss += self.delta * pc3d_loss.nan_to_num_(0.0)  
             
             # Visualization step
             if batch_idx == 0:
