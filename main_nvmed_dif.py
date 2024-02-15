@@ -173,8 +173,8 @@ class InverseXrayVolumeRenderer(nn.Module):
             timesteps = torch.zeros((batch), device=_device).long()
         
         R = cameras.R
-        T = cameras.T.unsqueeze_(-1)
-        # T = torch.zeros_like(cameras.T.unsqueeze_(-1))
+        # T = cameras.T.unsqueeze_(-1)
+        T = torch.zeros_like(cameras.T.unsqueeze_(-1))
         
         mat = torch.cat([R, T], dim=-1)
         inv = torch.cat([torch.inverse(R), -T], dim=-1)
