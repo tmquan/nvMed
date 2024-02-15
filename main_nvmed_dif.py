@@ -192,17 +192,19 @@ class InverseXrayVolumeRenderer(nn.Module):
         if resample:
             grd = F.affine_grid(inv, fov.size()).type(dtype)
                  
-            if is_training:
-                # Randomly choose between mid and fov with a 50% probability each using torch.rand()
-                if torch.rand(1).item() < 0.5:
-                    mid = F.grid_sample(fov, grd)
-                    vol = mid + self.net3d3d(mid)
-                else:
-                    out = fov + self.net3d3d(fov)
-                    vol = F.grid_sample(out, grd)
-            else: 
-                mid = F.grid_sample(fov, grd)
-                vol = mid + self.net3d3d(mid)
+            # if is_training:
+            #     # Randomly choose between mid and fov with a 50% probability each using torch.rand()
+            #     if torch.rand(1).item() < 0.5:
+            #         mid = F.grid_sample(fov, grd)
+            #         vol = mid + self.net3d3d(mid)
+            #     else:
+            #         out = fov + self.net3d3d(fov)
+            #         vol = F.grid_sample(out, grd)
+            # else: 
+            #     mid = F.grid_sample(fov, grd)
+            #     vol = mid + self.net3d3d(mid)
+            mid = F.grid_sample(fov, grd)
+            vol = mid + self.net3d3d(mid)
         else:
             vol = fov + self.net3d3d(fov)
         return vol
