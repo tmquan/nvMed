@@ -1,0 +1,169 @@
+import os
+import torch
+
+from typing import Optional, NamedTuple, Sequence
+from lightning_fabric.utilities.seed import seed_everything
+from lightning import Trainer, LightningModule
+from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks import LearningRateMonitor, EarlyStopping
+from lightning.pytorch.callbacks import StochasticWeightAveraging
+from lightning.pytorch.loggers import TensorBoardLogger
+
+from argparse import ArgumentParser
+from tqdm.auto import tqdm
+
+from pytorch3d.renderer.cameras import (
+    FoVPerspectiveCameras,
+    FoVOrthographicCameras,
+    look_at_view_transform,
+)
+
+from monai.losses import PerceptualLoss
+from monai.networks.nets import Unet
+from monai.networks.layers.factories import Norm
+
+from datamodule import UnpairedDataModule
+from dvr.renderer import ReverseXRayVolumeRenderer 
+from dvr.renderer import normalized
+from dvr.renderer import standardized
+
+def main(hparams):
+    # Seed the application
+    torch.manual_seed(hparams.seed)
+    
+    # Create data module
+    train_image3d_folders = [
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/train/images"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Imagenglab/processed/train/images'),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/AMOS2022/raw/train/images'),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/AMOS2022/raw/val/images'),
+    ]
+    train_label3d_folders = []
+    train_image2d_folders = [
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/JSRT/processed/images/'),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/ChinaSet/processed/images/'),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Montgomery/processed/images/'),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/VinDr/v1/processed/train/images/"),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/VinDr/v1/processed/test/images/'),
+    ]
+    train_label2d_folders = []
+    val_image3d_folders = [
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/train/images"),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Imagenglab/processed/train/images'),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/AMOS2022/raw/train/images'),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/AMOS2022/raw/val/images'),
+    ]
+    val_image2d_folders = [
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/JSRT/processed/images/'),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/ChinaSet/processed/images/'),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Montgomery/processed/images/'),
+        # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/VinDr/v1/processed/train/images/'),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/VinDr/v1/processed/test/images/"),
+    ]
+    test_image3d_folders = val_image3d_folders
+    test_image2d_folders = val_image2d_folders
+
+    datamodule = UnpairedDataModule(
+        train_image3d_folders=[os.path.join(hparams.datadir, path) for path in train_image3d_folders],
+        train_image2d_folders=[os.path.join(hparams.datadir, path) for path in train_image2d_folders],
+        val_image3d_folders=[os.path.join(hparams.datadir, path) for path in val_image3d_folders],
+        val_image2d_folders=[os.path.join(hparams.datadir, path) for path in val_image2d_folders],
+        test_image3d_folders=[os.path.join(hparams.datadir, path) for path in test_image3d_folders],
+        test_image2d_folders=[os.path.join(hparams.datadir, path) for path in test_image2d_folders],
+        train_samples=hparams.train_samples,
+        val_samples=hparams.val_samples,
+        test_samples=hparams.test_samples,
+        batch_size=hparams.batch_size,
+        img_shape=hparams.img_shape,
+        vol_shape=hparams.vol_shape,
+    )
+    datamodule.setup(seed=hparams.seed)
+
+    # Callback
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=f"{hparams.logsdir}_{hparams.phase}",
+        monitor="validation_loss_epoch",
+        auto_insert_metric_name=True,
+        save_top_k=-1,
+        save_last=True,
+        every_n_epochs=10,
+    )
+    # Logger
+    tensorboard_logger = TensorBoardLogger(save_dir=f"{hparams.logsdir}_{hparams.phase}", log_graph=True)
+
+    # Init model with callbacks
+    trainer = Trainer(
+        accelerator=hparams.accelerator,
+        devices=hparams.devices,
+        max_epochs=hparams.epochs,
+        logger=[tensorboard_logger],
+        callbacks=[checkpoint_callback],
+        accumulate_grad_batches=4,
+        strategy="auto",
+        precision=16 if hparams.amp else 32,
+    )
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser()
+    # Add all the arguments
+    parser.add_argument("--conda_env", type=str, default="Unet")
+    parser.add_argument("--notification_email", type=str, default="quantm88@gmail.com")
+    parser.add_argument("--accelerator", default=None)
+    parser.add_argument("--devices", default=None)
+    # Model arguments
+    parser.add_argument("--sh", type=int, default=0, help="degree of spherical harmonic (2, 3)")
+    parser.add_argument("--pe", type=int, default=0, help="positional encoding (0 - 8)")
+    parser.add_argument("--n_pts_per_ray", type=int, default=400, help="Sampling points per ray")
+    parser.add_argument("--batch_size", type=int, default=1, help="size of the batches")
+    parser.add_argument("--seed", type=int, default=42, help="seed")
+    parser.add_argument("--img_shape", type=int, default=256, help="spatial size of the tensor")
+    parser.add_argument("--vol_shape", type=int, default=256, help="spatial size of the tensor")
+    parser.add_argument("--fov_depth", type=int, default=256, help="raymarch num of the tensor")
+    parser.add_argument("--epochs", type=int, default=301, help="number of epochs")
+    parser.add_argument("--train_samples", type=int, default=1000, help="training samples")
+    parser.add_argument("--val_samples", type=int, default=400, help="validation samples")
+    parser.add_argument("--test_samples", type=int, default=400, help="test samples")
+    parser.add_argument("--timesteps", type=int, default=180, help="timesteps for diffusion")
+    parser.add_argument("--amp", action="store_true", help="train with mixed precision or not")
+    parser.add_argument("--test", action="store_true", help="test")
+    parser.add_argument("--lpips", action="store_true", help="train with lpips xray ct random")
+    parser.add_argument("--strict", action="store_true", help="checkpoint loading")
+    parser.add_argument("--perceptual2d", action="store_true", help="perceptual 2d loss")
+    parser.add_argument("--perceptual3d", action="store_true", help="perceptual 3d loss")
+    parser.add_argument("--perceptual", action="store_true", help="perceptual 2d/fake 3d loss")
+    parser.add_argument("--ssim", action="store_true", help="ssim")
+    parser.add_argument("--resample", action="store_true", help="resample")
+    parser.add_argument("--phase", type=str, default="direct", help="direct|cyclic|paired")
+    parser.add_argument("--alpha", type=float, default=1.0, help="vol loss")
+    parser.add_argument("--gamma", type=float, default=1.0, help="img loss")
+    parser.add_argument("--delta", type=float, default=1.0, help="vgg loss")
+    parser.add_argument("--theta", type=float, default=1.0, help="cam loss")
+    parser.add_argument("--omega", type=float, default=1.0, help="cam cond")
+    parser.add_argument("--lamda", type=float, default=1.0, help="cam roto")
+    parser.add_argument("--tfunc", action="store_true", help="tfunc function")
+    parser.add_argument("--lr", type=float, default=1e-3, help="adam: learning rate")
+    parser.add_argument("--ckpt", type=str, default=None, help="path to checkpoint")
+    parser.add_argument("--logsdir", type=str, default="logs", help="logging directory")
+    parser.add_argument("--datadir", type=str, default="data", help="data directory")
+    parser.add_argument("--strategy", type=str, default="auto", help="training strategy")
+    parser.add_argument("--backbone", type=str, default="efficientnet-b7", help="Backbone for network")
+    parser.add_argument("--prediction_type", type=str, default="sample", help="prediction_type for network")
+    parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay")
+    # Collect the hyper parameters
+    hparams = parser.parse_args()
+    main(hparams)

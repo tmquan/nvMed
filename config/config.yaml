@@ -1,0 +1,97 @@
+# defaults:
+#   - model: nvmed
+#   - _self_
+
+name: nvmed
+seed: 2023
+mode: fit                     # fit, validate, test, export-mesh
+
+# # export-mesh options
+# mesh_fname: /results/mesh.obj # mesh file name when mode=export-mesh
+# mesh_resolution: 128          # Mesh resolution when mode=export-mesh
+
+# # benchmark options
+# enable_benchmark: False
+# benchmark_callback:
+#   _target_: benchmark_callback.BenchmarkCallback
+#   log_every_n_steps: 1
+
+trainer:
+  devices: 1
+  num_nodes: 1
+  precision: 16
+  max_steps: 10000 # example configs: dreamfuions=10000, dmtet=5000
+  accelerator: gpu
+  enable_checkpointing: False
+  logger: False
+  log_every_n_steps: 1
+  val_check_interval: 100
+  accumulate_grad_batches: 1
+  benchmark: False
+  enable_model_summary: True
+
+exp_manager:
+  name: ${name}
+  exp_dir: /results
+  create_tensorboard_logger: False
+  create_wandb_logger: False
+  wandb_logger_kwargs:
+    project: dreamfusion
+    group: nemo-df
+    name: ${name}
+    resume: True
+  create_checkpoint_callback: True
+  checkpoint_callback_params:
+    every_n_epochs: 0
+    every_n_train_steps: 1000 # TODO(ahmadki): being ignored ?
+    monitor: loss
+    filename: '${name}-{step}'
+    save_top_k: -1
+    always_save_nemo: True
+  resume_if_exists: True
+  resume_ignore_no_checkpoint: True
+
+
+# trainer:
+#   accelerator: gpu
+#   alpha: 1.0
+#   amp: true
+#   backbone: efficientnet-b0
+#   batch_size: 1
+#   ckpt: null
+#   conda_env: Unet
+#   datadir: /home/quantm/data
+#   delta: 0.002
+#   devices: '1'
+#   epochs: 201
+#   fov_depth: 256
+#   gamma: 1.0
+#   img_shape: 256
+#   lamda: 1.0
+#   logsdir: /home/quantm/logs/nvmed_dif_resample
+#   lpips: false
+#   lr: 0.0001
+#   n_pts_per_ray: 256
+#   notification_email: quantm88@gmail.com
+#   omega: 0.002
+#   pe: 0
+#   perceptual: false
+#   perceptual2d: false
+#   perceptual3d: false
+#   phase: ctxray
+#   prediction_type: sample
+#   resample: true
+#   seed: 42
+#   sh: 0
+#   ssim: false
+#   strategy: auto
+#   strict: false
+#   test: false
+#   test_samples: 400
+#   tfunc: false
+#   theta: 1.0
+#   timesteps: 180
+#   train_samples: 2000
+#   val_samples: 400
+#   vol_shape: 256
+#   weight_decay: 0.0001

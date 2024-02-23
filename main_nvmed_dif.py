@@ -133,13 +133,13 @@ class InverseXrayVolumeRenderer(nn.Module):
             spatial_dims=2,
             in_channels=1,  # Condition with straight/hidden view
             out_channels=self.fov_depth,
-            num_channels=backbones[backbone],
-            attention_levels=[False, False, False, True, True],
-            norm_num_groups=8,
+            # num_channels=backbones[backbone],
+            # attention_levels=[False, False, False, True, True],
+            # norm_num_groups=8,
+            # num_res_blocks=1,
+            num_channels=(128, 128, 256, 256),
+            attention_levels=(False, False, True, True),
             num_res_blocks=1,
-            # num_channels=(128, 128, 256, 256),
-            # attention_levels=(False, False, True, True),
-            # num_res_blocks=2,
             num_head_channels=256,
             with_conditioning=True,
             cross_attention_dim=12,  # flatR | flatT
@@ -150,12 +150,12 @@ class InverseXrayVolumeRenderer(nn.Module):
                 spatial_dims=3, 
                 in_channels=1, 
                 out_channels=1, 
-                channels=backbones[backbone], 
-                strides=(2, 2, 2, 2, 2), 
+                # channels=backbones[backbone], 
+                # strides=(2, 2, 2, 2, 2), 
+                # num_res_units=1, 
+                channels=(128, 128, 256, 256),
+                strides=(2, 2, 2, 2), 
                 num_res_units=1, 
-                # channels=(128, 128, 256, 256),
-                # strides=(2, 2, 2, 2), 
-                # num_res_units=2, 
                 kernel_size=3, 
                 up_kernel_size=3, 
                 act=("LeakyReLU", {"inplace": True}), 
@@ -258,16 +258,17 @@ class NVMLightningModule(LightningModule):
             ndc_extent=1.0,
         )
 
-        self.inv_renderer = InverseXrayVolumeRenderer(
-            in_channels=1, 
-            out_channels=self.sh ** 2 if self.sh > 0 else 1, 
-            vol_shape=self.vol_shape, 
-            img_shape=self.img_shape, 
-            sh=self.sh, 
-            pe=self.pe, 
-            backbone=self.backbone,
-        )
-        # init_weights(self.inv_renderer, init_type="normal")
+        if self.phase != 'xronly':
+            self.inv_renderer = InverseXrayVolumeRenderer(
+                in_channels=1, 
+                out_channels=self.sh ** 2 if self.sh > 0 else 1, 
+                vol_shape=self.vol_shape, 
+                img_shape=self.img_shape, 
+                sh=self.sh, 
+                pe=self.pe, 
+                backbone=self.backbone,
+            )
+            # init_weights(self.inv_renderer, init_type="normal")
         
         # @ Diffusion 
         self.unet2d_model = DiffusionModelUNet(
@@ -277,8 +278,8 @@ class NVMLightningModule(LightningModule):
             # num_channels=backbones[self.backbone], 
             # attention_levels=[False, False, False, True, True], 
             # norm_num_groups=16, 
-            # num_res_blocks=2, 
-            num_channels=(256, 256, 256, 256),
+            # num_res_blocks=1, 
+            num_channels=(128, 128, 256, 256),
             attention_levels=(False, False, True, True),
             num_res_blocks=1,
             num_head_channels=256,
@@ -322,8 +323,9 @@ class NVMLightningModule(LightningModule):
             beta_end=0.0195, 
             clip_sample=True,
         )
-        self.ddimsch.set_timesteps(num_inference_steps=100)
-        self.inferer = DiffusionInferer(scheduler=self.ddimsch)
+        # self.ddimsch.set_timesteps(num_inference_steps=100)
+        self.inferer = DiffusionInferer(scheduler=self.ddpmsch)
+        # self.inferer = DiffusionInferer(scheduler=self.ddimsch)
                 
         if self.ckpt:
             print("Loading.. ", self.ckpt)
@@ -333,9 +335,9 @@ class NVMLightningModule(LightningModule):
 
         self.train_step_outputs = []
         self.validation_step_outputs = []
-        self.mseloss = nn.MSELoss(reduction="mean")
-        self.maeloss = nn.L1Loss(reduction="mean")
-        self.loss = self.mseloss
+        # self.mseloss = nn.MSELoss(reduction="mean")
+        # self.maeloss = nn.L1Loss(reduction="mean")
+        self.loss = nn.L1Loss(reduction="mean")
 
         if self.perceptual:
             self.p2dloss = PerceptualLoss(
@@ -411,18 +413,18 @@ class NVMLightningModule(LightningModule):
         # T = torch.zeros_like(cameras.T.unsqueeze_(-1))
         mat = torch.cat([R, T], dim=-1)
         # inv = torch.cat([torch.inverse(R).reshape(B, 1, -1), T], dim=-1)
-        results = self.unet2d_model(
-            x=image2d * 2.0 - 1.0, 
-            context=mat.reshape(B, 1, -1), 
-            timesteps=timesteps,
-        ) * 0.5 + 0.5
-        # results = self.inferer(
-        #     inputs=image2d * 2.0 - 1.0, 
-        #     diffusion_model=self.unet2d_model, 
-        #     conditioning=mat.view(B, 1, -1), 
-        #     noise=noise, 
-        #     timesteps=timesteps
+        # results = self.unet2d_model(
+        #     x=image2d * 2.0 - 1.0, 
+        #     context=mat.reshape(B, 1, -1), 
+        #     timesteps=timesteps,
         # ) * 0.5 + 0.5
+        results = self.inferer(
+            inputs=image2d * 2.0 - 1.0, 
+            diffusion_model=self.unet2d_model, 
+            condition=mat.view(B, 1, -1), 
+            noise=noise, 
+            timesteps=timesteps
+        ) * 0.5 + 0.5
         return results
     
     def _common_step(self, batch, batch_idx, stage: Optional[str] = "evaluation"):
@@ -483,10 +485,11 @@ class NVMLightningModule(LightningModule):
 
             # figure_xr_latent_hidden = torch.randn_like(image2d)
             volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5 
-            volume_xr_interp = self.ddpmsch.add_noise(original_samples=volume_xr_hidden_inverse, noise=volume_xr_latent, timesteps=timesteps) 
+            # volume_xr_interp = self.ddpmsch.add_noise(original_samples=volume_xr_hidden_inverse, noise=volume_xr_latent, timesteps=timesteps) 
             figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
-            # figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d, noise=figure_xr_latent_hidden, timesteps=timesteps) 
-            figure_xr_interp_hidden = self.forward_screen(image3d=volume_xr_interp, cameras=view_hidden)
+            figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d, noise=figure_xr_latent_hidden, timesteps=timesteps) 
+            # figure_xr_interp_hidden = self.forward_screen(image3d=volume_xr_interp, cameras=view_hidden)
+
 
             volume_ct_latent = torch.randn_like(image3d) * 0.5 + 0.5 
             figure_ct_latent_random = self.forward_screen(image3d=volume_ct_latent, cameras=view_random)
@@ -548,9 +551,7 @@ class NVMLightningModule(LightningModule):
                           + self.loss(figure_xr_hidden_output_hidden, figure_xr_target_hidden) \
                           + self.loss(figure_xr_output_hidden, figure_xr_target_hidden) \
                           + self.loss(figure_ct_output_random, figure_ct_target_random) \
-                          + self.loss(figure_ct_output_hidden, figure_ct_target_hidden) \
-                          + self.loss(figure_ct_output_random, figure_ct_target_random) \
-                          + self.loss(figure_ct_output_hidden, figure_ct_target_hidden) \
+                          + self.loss(figure_ct_output_hidden, figure_ct_target_hidden) 
                
             im3d_loss = im3d_loss_inv + im3d_loss_dif
             im2d_loss = im2d_loss_inv + im2d_loss_dif
@@ -595,7 +596,7 @@ class NVMLightningModule(LightningModule):
                     figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden * 2.0 - 1.0, 
                                                                   diffusion_model=self.unet2d_model, 
                                                                   conditioning=mat.view(batchsz, 1, -1), 
-                                                                  scheduler=self.ddimsch, 
+                                                                  scheduler=self.ddpmsch, 
                                                                   verbose=False,) * 0.5 + 0.5
                     volume_xr_sample_hidden = self.forward_volume(image2d=figure_xr_sample_hidden, 
                                                                   cameras=view_hidden, 
@@ -679,7 +680,120 @@ class NVMLightningModule(LightningModule):
                 tensorboard = self.logger.experiment
                 grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0)
                 tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)
-                      
+
+        if self.phase == "xronly":     
+            ### @ Diffusion step: 2 kinds of blending
+            timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long()  # 3 views
+
+            # figure_xr_latent_hidden = torch.randn_like(image2d)
+            volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5 
+            # volume_xr_interp = self.ddpmsch.add_noise(original_samples=volume_xr_hidden_inverse, noise=volume_xr_latent, timesteps=timesteps) 
+            figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
+            figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d, noise=figure_xr_latent_hidden, timesteps=timesteps) 
+            # figure_xr_interp_hidden = self.forward_screen(image3d=volume_xr_interp, cameras=view_hidden)
+
+            volume_ct_latent = torch.randn_like(image3d) * 0.5 + 0.5 
+            figure_ct_latent_random = self.forward_screen(image3d=volume_ct_latent, cameras=view_random)
+            figure_ct_latent_hidden = self.forward_screen(image3d=volume_ct_latent, cameras=view_hidden)
+            volume_ct_interp = self.ddpmsch.add_noise(original_samples=image3d, noise=volume_ct_latent, timesteps=timesteps) 
+            figure_ct_interp_random = self.forward_screen(image3d=volume_ct_interp, cameras=view_random)
+            figure_ct_interp_hidden = self.forward_screen(image3d=volume_ct_interp, cameras=view_hidden)
+    
+            # Run the backward diffusion (denoising + reproject)
+            figure_dx_output = self.forward_timing(
+                image2d=torch.cat([figure_xr_interp_hidden, figure_ct_interp_random, figure_ct_interp_hidden]), 
+                cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+                noise=torch.cat([figure_xr_latent_hidden, figure_ct_latent_random, figure_ct_latent_hidden]), 
+                n_views=[1, 1, 1] * batchsz, 
+                timesteps=timesteps.repeat(3),
+            )
+            figure_xr_output_hidden, figure_ct_output_random, figure_ct_output_hidden = torch.split(figure_dx_output, batchsz)
+
+            if self.ddpmsch.prediction_type == "sample":
+                figure_xr_target_hidden = image2d
+                figure_ct_target_random = figure_ct_random
+                figure_ct_target_hidden = figure_ct_hidden
+                volume_ct_target = image3d
+            elif self.ddpmsch.prediction_type == "epsilon":
+                figure_xr_target_hidden = figure_xr_latent_hidden
+                figure_ct_target_random = figure_ct_latent_random
+                figure_ct_target_hidden = figure_ct_latent_hidden
+                volume_ct_target = volume_ct_latent
+            elif self.ddpmsch.prediction_type == "v_prediction":
+                figure_xr_target_hidden = self.ddpmsch.get_velocity(image2d, figure_xr_latent_hidden, timesteps)
+                figure_ct_target_random = self.ddpmsch.get_velocity(figure_ct_random, figure_ct_latent_random, timesteps)
+                figure_ct_target_hidden = self.ddpmsch.get_velocity(figure_ct_hidden, figure_ct_latent_hidden, timesteps)
+                volume_ct_target = self.ddpmsch.get_velocity(image3d, volume_ct_latent, timesteps)
+            
+            im2d_loss_dif = self.loss(figure_xr_output_hidden, figure_xr_target_hidden) \
+                          + self.loss(figure_ct_output_random, figure_ct_target_random) \
+                          + self.loss(figure_ct_output_hidden, figure_ct_target_hidden) \
+               
+            im2d_loss = im2d_loss_dif
+            self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
+            loss = self.gamma * im2d_loss
+            
+            # Visualization step
+            if batch_idx == 0:
+                # Sampling step for X-ray
+                with torch.no_grad():
+                    volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5
+                    R = view_hidden.R
+                    T = view_hidden.T.unsqueeze_(-1)
+                    # T = torch.zeros_like(view_hidden.T.unsqueeze_(-1))
+                    mat = torch.cat([R, T], dim=-1)
+                    # inv = torch.cat([torch.inverse(R).reshape(batchsz, 1, -1), torch.zeros((batchsz, 1, 3), device=_device)], dim=-1)
+                    figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden, is_training=(stage=="train"))
+                    figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden * 2.0 - 1.0, 
+                                                                  diffusion_model=self.unet2d_model, 
+                                                                  conditioning=mat.view(batchsz, 1, -1), 
+                                                                  scheduler=self.ddpmsch, 
+                                                                  verbose=False,) * 0.5 + 0.5
+                    R = view_random.R
+                    T = view_random.T.unsqueeze_(-1)
+                    # T = torch.zeros_like(view_random.T.unsqueeze_(-1))
+                    mat = torch.cat([R, T], dim=-1)
+                    # inv = torch.cat([torch.inverse(R).reshape(batchsz, 1, -1), torch.zeros((batchsz, 1, 3), device=_device)], dim=-1)
+                    figure_xr_latent_random = self.forward_screen(image3d=volume_xr_latent, cameras=view_random, is_training=(stage=="train"))
+                    figure_xr_sample_random = self.inferer.sample(input_noise=figure_xr_latent_random * 2.0 - 1.0, 
+                                                                  diffusion_model=self.unet2d_model, 
+                                                                  conditioning=mat.view(batchsz, 1, -1), 
+                                                                  scheduler=self.ddpmsch, 
+                                                                  verbose=False,) * 0.5 + 0.5
+                zeros = torch.zeros_like(image2d)
+                viz2d = torch.cat([
+                    torch.cat([
+                        image2d, 
+                        zeros,
+                        zeros, 
+                        zeros, 
+                        image3d[..., self.vol_shape // 2, :], 
+                        figure_ct_random, 
+                        figure_ct_hidden,
+                    ], dim=-2).transpose(2, 3),
+                    torch.cat([
+                        figure_xr_interp_hidden, 
+                        volume_xr_latent[..., self.vol_shape // 2, :],  
+                        figure_xr_sample_random, 
+                        figure_xr_sample_hidden, 
+                        volume_ct_interp[..., self.vol_shape // 2, :], 
+                        figure_ct_interp_random, 
+                        figure_ct_interp_hidden, 
+                    ], dim=-2).transpose(2, 3),
+                    torch.cat([
+                        figure_xr_output_hidden, 
+                        zeros, 
+                        figure_ct_output_random, 
+                        figure_ct_output_hidden, 
+                        volume_ct_latent[..., self.vol_shape // 2, :], 
+                        figure_ct_latent_random, 
+                        figure_ct_latent_hidden,  
+                    ], dim=-2).transpose(2, 3),
+                ], dim=-2)
+
+                tensorboard = self.logger.experiment
+                grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=True, nrow=1, padding=0)
+                tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)            
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -704,15 +818,15 @@ class NVMLightningModule(LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            [
-                # {"params": self.fwd_renderer.parameters()},
-                # {"params": self.emb_function.parameters()}, 
-                {"params": self.unet2d_model.parameters()},
-                {"params": self.inv_renderer.parameters()},
-            ],
+            # [
+            #     # {"params": self.fwd_renderer.parameters()},
+            #     # {"params": self.emb_function.parameters()}, 
+            #     {"params": self.unet2d_model.parameters()},
+            #     {"params": self.inv_renderer.parameters()},
+            # ],
             # self.unet2d_model.parameters(),
             # self.inv_renderer.parameters(),
-            # self.parameters(),
+            self.parameters(),
             lr=self.lr,
             betas=(0.9, 0.999)
             # 
