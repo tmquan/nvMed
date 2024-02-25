@@ -39,6 +39,8 @@ from generative.inferers import DiffusionInferer
 from generative.networks.nets import DiffusionModelUNet
 from generative.networks.schedulers import DDPMScheduler, DDIMScheduler
 
+from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel, UNet2DConditionModel
+
 from datamodule import UnpairedDataModule
 from dvr.renderer import ReverseXRayVolumeRenderer 
 from dvr.renderer import normalized
@@ -146,34 +148,38 @@ class NVMLightningModule(LightningModule):
             # init_weights(self.inv_renderer, init_type="normal")
         
         # @ Diffusion 
-        self.unet2d_model = DiffusionModelUNet(
-            spatial_dims=2,
-            in_channels=1,
-            out_channels=1,
-            num_channels=[256, 256, 512],
-            attention_levels=[False, False, True],
-            num_head_channels=[0, 0, 512],
-            num_res_blocks=2,
-            with_conditioning=True, 
-            cross_attention_dim=16, # Condition with straight/hidden view  # flatR | flatT
+        self.unet2d_model = UNet2DConditionModel(
+            sample_size = self.img_shape, 
+            in_channels=1,  
+            out_channels=1,  # the number of output channels
+            layers_per_block=2,  
+            block_out_channels=(
+                128,
+                128,
+                256,
+                256,
+                512,
+                512,
+            ),  # the number of output channes for each UNet block
+            down_block_types=(
+                "DownBlock2D",  # a regular ResNet downsampling block
+                "DownBlock2D",
+                "DownBlock2D",
+                "DownBlock2D",
+                "AttnDownBlock2D",  # a ResNet downsampling block with spatial self-attention
+                "AttnDownBlock2D",
+            ),
+            up_block_types=(
+                "AttnUpBlock2D",  # a regular ResNet upsampling block
+                "AttnUpBlock2D",  # a ResNet upsampling block with spatial self-attention
+                "UpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+            ),
+            cross_attention_dim=16
         )
-        # init_weights(self.unet2d_model, init_type="normal")
-
-        self.ddpmsch = DDPMScheduler(
-            num_train_timesteps=self.timesteps, 
-            prediction_type=hparams.prediction_type, 
-            schedule="scaled_linear_beta", 
-            beta_start=0.0005, 
-            beta_end=0.0195,
-        )
-        self.ddimsch = DDIMScheduler(
-            num_train_timesteps=self.timesteps, 
-            prediction_type=hparams.prediction_type, 
-            schedule="scaled_linear_beta", 
-            beta_start=0.0005, 
-            beta_end=0.0195, 
-        )
-        self.inferer = DiffusionInferer(scheduler=self.ddpmsch)
+        self.ddpmsch = DDPMScheduler(num_train_timesteps=1000)
                 
         if self.ckpt:
             print("Loading.. ", self.ckpt)
@@ -254,18 +260,12 @@ class NVMLightningModule(LightningModule):
         if timesteps is None:
             timesteps = torch.zeros((B,), device=_device).long()
         mat = cameras.get_projection_transform().get_matrix().contiguous().view(-1, 1, 16)
-        results = self.inferer(
-            inputs=image2d * 2.0 - 1.0, 
-            diffusion_model=self.unet2d_model, 
-            condition=mat.view(B, 1, -1), 
-            noise=noise * 2.0 - 1.0, 
-            timesteps=timesteps
-        ) * 0.5 + 0.5
-        # results = self.unet2d_model(
-        #     x=image2d * 2.0 - 1.0, 
-        #     timesteps=timesteps, 
-        #     context=mat
-        # ) * 0.5 + 0.5
+        
+        results = self.unet2d_model(
+            sample=image2d * 2.0 - 1.0, 
+            timestep=timesteps, 
+            class_labels=mat
+        ).sample * 0.5 + 0.5
         return results
     
     def _common_step(self, batch, batch_idx, stage: Optional[str] = "evaluation"):
@@ -291,60 +291,6 @@ class NVMLightningModule(LightningModule):
         figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
         figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
         
-        if self.phase == "xronly":     
-            ### @ Diffusion step: 2 kinds of blending
-            timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long()  # 3 views
-
-            figure_xr_latent_hidden = torch.randn_like(image2d) * 0.5 + 0.5 
-            figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d, noise=figure_xr_latent_hidden, timesteps=timesteps) 
-            
-            figure_xr_output_hidden = self.forward_timing(
-                image2d=figure_xr_interp_hidden,
-                cameras=view_hidden,
-                noise=figure_xr_latent_hidden,
-                n_views=[1] * batchsz, 
-                timesteps=timesteps,
-            )
-            
-            if self.ddpmsch.prediction_type == "sample":
-                figure_xr_target_hidden = image2d
-            elif self.ddpmsch.prediction_type == "epsilon":
-                figure_xr_target_hidden = figure_xr_latent_hidden
-            elif self.ddpmsch.prediction_type == "v_prediction":
-                figure_xr_target_hidden = self.ddpmsch.get_velocity(image2d, figure_xr_latent_hidden, timesteps)
-            
-            im2d_loss_dif = self.loss(figure_xr_output_hidden, figure_xr_target_hidden) 
-               
-            im2d_loss = im2d_loss_dif
-            self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            loss = self.gamma * im2d_loss
-            
-            # Visualization step
-            if batch_idx == 0:
-                # Sampling step for X-ray
-                with torch.no_grad():
-                    mat = view_hidden.get_projection_transform().get_matrix().contiguous().view(-1, 1, 16)
-                    figure_xr_latent_hidden = torch.randn_like(image2d) * 0.5 + 0.5
-                    figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden * 2.0 - 1.0, 
-                                                                  diffusion_model=self.unet2d_model, 
-                                                                  conditioning=mat.view(batchsz, 1, -1), 
-                                                                  scheduler=self.ddpmsch, 
-                                                                  verbose=False,) * 0.5 + 0.5
-                zeros = torch.zeros_like(image2d)
-                viz2d = torch.cat([
-                    torch.cat([
-                        image2d, 
-                        figure_xr_latent_hidden,
-                        figure_xr_interp_hidden,
-                        figure_xr_output_hidden,
-                        figure_xr_sample_hidden,
-                    ], dim=-2).transpose(2, 3),
-                ], dim=-2)
-
-                tensorboard = self.logger.experiment
-                grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(0, 1)
-                tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx)            
-        
         if self.phase == "ctproj":    
             ### @ Diffusion step: 2 kinds of blending
             timesteps = torch.randint(0, self.timesteps, (batchsz,), device=_device).long()  # 3 views
@@ -366,9 +312,9 @@ class NVMLightningModule(LightningModule):
 
             # Run the backward diffusion (denoising + reproject)
             figure_dx_output = self.forward_timing(
-                image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
-                cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-                noise=torch.cat([figure_xr_latent_hidden, figure_ct_latent_random, figure_ct_latent_hidden]), 
+                image2d=torch.cat([figure_xr_interp_hidden, figure_ct_interp_random, figure_ct_interp_hidden]),
+                noise=None, 
+                cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]),  
                 n_views=[1, 1, 1] * batchsz, 
                 timesteps=timesteps.repeat(3),
             )
@@ -403,40 +349,29 @@ class NVMLightningModule(LightningModule):
                     volume_xr_latent = torch.empty_like(image3d) 
                     nn.init.trunc_normal_(volume_xr_latent, mean=0.50, std=0.25, a=0, b=1)
                     figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden, is_training=(stage=="train"))
-                    self.ddpmsch.set_timesteps(num_inference_steps=self.timesteps)
-                    mat_hidden = view_hidden.get_projection_transform().get_matrix().contiguous().view(-1, 1, 16)
-                    figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden * 2.0 - 1.0, 
-                                                                  diffusion_model=self.unet2d_model, 
-                                                                  conditioning=mat_hidden.view(batchsz, 1, -1), 
-                                                                  verbose=False) * 0.5 + 0.5
                     figure_xr_latent_random = self.forward_screen(image3d=volume_xr_latent, cameras=view_random, is_training=(stage=="train"))
-                    self.ddpmsch.set_timesteps(num_inference_steps=self.timesteps)
-                    mat_random = view_hidden.get_projection_transform().get_matrix().contiguous().view(-1, 1, 16)
-                    figure_xr_sample_random = self.inferer.sample(input_noise=figure_xr_latent_random * 2.0 - 1.0, 
-                                                                  diffusion_model=self.unet2d_model, 
-                                                                  conditioning=mat_random.view(batchsz, 1, -1), 
-                                                                  verbose=False) * 0.5 + 0.5
+                    mat_hidden = view_hidden.get_projection_transform().get_matrix().contiguous().view(-1, 1, 16)
+                    mat_random = view_random.get_projection_transform().get_matrix().contiguous().view(-1, 1, 16)
+                    figure_xr_sample_hidden = figure_xr_latent_hidden * 2.0 - 1.0
+                    figure_xr_sample_random = figure_xr_latent_random * 2.0 - 1.0
                     
-                    # figure_xr_latent = torch.randn_like(image2d) * 0.5 + 0.5  
-                    # figure_xr_latent_hidden = figure_xr_latent.clone()
-                    # self.ddpmsch.set_timesteps(num_inference_steps=self.timesteps)
-                    # mat_hidden = view_hidden.get_projection_transform().get_matrix().contiguous().view(-1, 1, 16)
-                    # figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden * 2.0 - 1.0, 
-                    #                                               diffusion_model=self.unet2d_model, 
-                    #                                               conditioning=mat_hidden.view(batchsz, 1, -1), 
-                    #                                               verbose=False,
-                    #                                               # scheduler=self.ddpmsch, 
-                    #                                               ) * 0.5 + 0.5   
-                    
-                    # figure_xr_latent_random = figure_xr_latent.clone()
-                    # self.ddpmsch.set_timesteps(num_inference_steps=self.timesteps)
-                    # mat_random = view_hidden.get_projection_transform().get_matrix().contiguous().view(-1, 1, 16)
-                    # figure_xr_sample_random = self.inferer.sample(input_noise=figure_xr_latent_random * 2.0 - 1.0, 
-                    #                                               diffusion_model=self.unet2d_model, 
-                    #                                               conditioning=mat_random.view(batchsz, 1, -1), 
-                    #                                               verbose=False,
-                    #                                               # scheduler=self.ddpmsch, 
-                    #                                               ) * 0.5 + 0.5   
+                    self.ddpmsch.set_timesteps(self.timesteps)
+                    verbose = True
+                    if verbose:
+                        pbar = tqdm(self.ddpmsch.timesteps)
+                    else:
+                        pbar = iter(self.ddpmsch.timesteps)
+
+                    for t in pbar:
+                        model_output = self.unet2d_model(figure_xr_sample_hidden, t, class_labels=mat_hidden).sample
+                        figure_xr_sample_hidden = self.ddpmsch.step(model_output, t, figure_xr_sample_hidden, generator=None).prev_sample
+                    for t in pbar:
+                        model_output = self.unet2d_model(figure_xr_sample_random, t, class_labels=mat_random).sample
+                        figure_xr_sample_random = self.ddpmsch.step(model_output, t, figure_xr_sample_random, generator=None).prev_sample
+
+                    figure_xr_sample_hidden = figure_xr_sample_hidden * 0.5 + 0.5  
+                    figure_xr_sample_random = figure_xr_sample_random * 0.5 + 0.5  
+                   
                 zeros = torch.zeros_like(image2d)
                 viz2d = torch.cat([
                     torch.cat([
