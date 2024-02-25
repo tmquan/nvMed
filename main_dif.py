@@ -157,7 +157,7 @@ class NVMLightningModule(LightningModule):
             with_conditioning=True, 
             cross_attention_dim=16, # Condition with straight/hidden view  # flatR | flatT
         )
-        init_weights(self.unet2d_model, init_type="normal")
+        # init_weights(self.unet2d_model, init_type="normal")
 
         self.ddpmsch = DDPMScheduler(
             num_train_timesteps=self.timesteps, 
