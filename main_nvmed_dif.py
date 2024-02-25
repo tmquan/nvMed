@@ -109,6 +109,7 @@ class NVMLightningModule(LightningModule):
         
         self.timesteps = hparams.timesteps
         self.resample = hparams.resample
+        self.prediction_type = hparams.prediction_type
         self.perceptual2d = hparams.perceptual2d
         self.perceptual3d = hparams.perceptual3d
         self.perceptual = hparams.perceptual
@@ -178,8 +179,12 @@ class NVMLightningModule(LightningModule):
                 "UpBlock2D",
             ),
             cross_attention_dim=16
+            # num_class_embeds=16,
         )
-        self.ddpmsch = DDPMScheduler(num_train_timesteps=1000)
+        self.ddpmsch = DDPMScheduler(
+            num_train_timesteps=self.timesteps, 
+            prediction_type=self.prediction_type
+        )
                 
         if self.ckpt:
             print("Loading.. ", self.ckpt)
@@ -264,7 +269,7 @@ class NVMLightningModule(LightningModule):
         results = self.unet2d_model(
             sample=image2d * 2.0 - 1.0, 
             timestep=timesteps, 
-            class_labels=mat
+            encoder_hidden_states=mat
         ).sample * 0.5 + 0.5
         return results
     
@@ -356,17 +361,25 @@ class NVMLightningModule(LightningModule):
                     figure_xr_sample_random = figure_xr_latent_random * 2.0 - 1.0
                     
                     self.ddpmsch.set_timesteps(self.timesteps)
-                    verbose = True
+                    verbose = False
                     if verbose:
                         pbar = tqdm(self.ddpmsch.timesteps)
                     else:
                         pbar = iter(self.ddpmsch.timesteps)
 
                     for t in pbar:
-                        model_output = self.unet2d_model(figure_xr_sample_hidden, t, class_labels=mat_hidden).sample
+                        model_output = self.unet2d_model(
+                            sample=figure_xr_sample_hidden, 
+                            timestep=t, 
+                            encoder_hidden_states=mat_hidden
+                            ).sample
                         figure_xr_sample_hidden = self.ddpmsch.step(model_output, t, figure_xr_sample_hidden, generator=None).prev_sample
                     for t in pbar:
-                        model_output = self.unet2d_model(figure_xr_sample_random, t, class_labels=mat_random).sample
+                        model_output = self.unet2d_model(
+                            sample=figure_xr_sample_random, 
+                            timestep=t, 
+                            encoder_hidden_states=mat_random
+                            ).sample
                         figure_xr_sample_random = self.ddpmsch.step(model_output, t, figure_xr_sample_random, generator=None).prev_sample
 
                     figure_xr_sample_hidden = figure_xr_sample_hidden * 0.5 + 0.5  
